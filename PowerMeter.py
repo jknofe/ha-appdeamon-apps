@@ -50,17 +50,21 @@ class PowerMeter(hass.Hass):
 
             #self.log(f"3EM: A={power_ph_a}W, B={power_ph_b}W, C={power_ph_c}W", G={power_garage}W")
 
-        except Exception as e:
+        except (ValueError, Exception) as e:
             self.log(f"Error fetching 3EM.GetStatus: {e}")
+            power_ph_a = 0.0
+            power_ph_b = 0.0
+            power_ph_c = 0.0
 
         # Query second URL (Switch.GetStatus)
         try:
             response2 = requests.get(url_1pm, timeout=1.25)
             data2 = response2.json()
-            self.power_solar = data2.get("apower", 0)
+            self.power_solar = float(data2.get("apower", 0))
             #self.log(f"1PM: S={power_solar}W")
-        except Exception as e:
+        except (ValueError, Exception) as e:
             self.log(f"Error fetching 1PM.GetStatus: {e}")
+            self.power_solar = 0.0
 
         # calculate phase sum
         ph_sum_act = power_ph_a + power_ph_b + power_ph_c + self.power_garage
@@ -82,4 +86,4 @@ class PowerMeter(hass.Hass):
         # round and limit power consumption to 0.0W
         self.power_con = max(0.0, round(power_con, 1))
 
-        self.log(f"S={round(self.power_ph_sum,1)}W, I={power_imp}W, E={power_exp}W, C={self.power_con}W")
+        self.log(f"P={round(self.power_ph_sum,1)}W, I={power_imp}W, E={power_exp}W, S={self.power_solar} C={self.power_con}W")
