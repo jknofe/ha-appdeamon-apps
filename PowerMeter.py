@@ -62,6 +62,6 @@ class PowerMeter(hass.Hass):
             self.log(f"Error fetching 1PM.GetStatus: {e}")
 
         ph_sum_act = power_ph_a + power_ph_b + power_ph_c
-        self.log(f"Phase-Sum: S={ph_sum_act}W")
-        self.power_ph_sum = self._simple_ema_filter(ph_sum_act, self.power_ph_sum, 0.3)
-        self.log(f"Phase-Sum: S={self.power_ph_sum}W")
+        self.log(f"Phase-Sum_raw: S={ph_sum_act}W")
+        self.power_ph_sum = self._simple_ema_filter(ph_sum_act, self.power_ph_sum, 0.8)
+        self.log(f"Phase-Sum_flt: F={self.power_ph_sum}W")
