@@ -61,5 +61,5 @@ class PowerMeter(hass.Hass):
         except Exception as e:
             self.log(f"Error fetching 1PM.GetStatus: {e}")
 
-        self.power_ph_sum = self._simple_ema_filter(power_ph_a + power_ph_b + power_ph_c + self.power_garage, self.power_ph_sum, 0.3)
+        self.power_ph_sum = self._simple_ema_filter(power_ph_a + power_ph_b + power_ph_c, self.power_ph_sum, 0.3)
         self.log(f"Phase-Sum: S={self.power_ph_sum}W")
