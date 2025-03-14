@@ -29,8 +29,11 @@ class PowerMeter(hass.Hass):
             # self.power_garage = float(self.get_state("sensor.fritz_dect_200_1_power"))
             #self.power_garage = self.get_state("sensor.fritz_dect_200_1_power")
             #self.log(f"Garage: G={self.power_garage}W")
+            entidy_string = "sensor.fritz_dect_200_1_power"
+            self.log(f"{self.get_entity(entidy_string)}")
 
-            self.log(f"{self.get_entity("sensor.fritz_dect_200_1_power")}")
+            self.log(f"{self.get_state(entidy_string)}")
+
 
         except Exception as e:
             self.log(f"Error fetching sensor.fritz_dect_200_1_power: {e}")
