@@ -5,7 +5,7 @@ class PowerMeter(hass.Hass):
     def initialize(self):
         """Initialize the app and set up periodic polling."""
         self.log("PowerMeter App Started!")
-        self.run_every(self.query_power_meters, "now", 3)  # Runs every 3 second
+        self.run_every(self.query_power_meters, "now", 2)  # Runs every 3 second
 
         self.power_ph_a = 0.0
         self.power_ph_b = 0.0
@@ -34,7 +34,7 @@ class PowerMeter(hass.Hass):
 
         # Query first URL (EM.GetStatus)
         try:
-            response1 = requests.get(url_3em, timeout=2)
+            response1 = requests.get(url_3em, timeout=1)
             data1 = response1.json()
             power_ph_a = float(data1.get("a_act_power", 0))
             power_ph_b = float(data1.get("b_act_power", 0))
