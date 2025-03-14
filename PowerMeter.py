@@ -14,7 +14,7 @@ class PowerMeter(hass.Hass):
         self.power_garage = 0.0
         self.power_solar = 0.0
     
-    def _simple_ema_filter(self, value, ema, alpha):
+    def _simple_ema_filter(value, ema, alpha):
         """Simple Exponential Moving Average filter."""
         return alpha * value + (1 - alpha) * ema
     
@@ -61,5 +61,7 @@ class PowerMeter(hass.Hass):
         except Exception as e:
             self.log(f"Error fetching 1PM.GetStatus: {e}")
 
-        self.power_ph_sum = self._simple_ema_filter(power_ph_a + power_ph_b + power_ph_c, self.power_ph_sum, 0.3)
+        ph_sum_act = power_ph_a + power_ph_b + power_ph_c
+        self.log(f"Phase-Sum: S={ph_sum_act}W")
+        self.power_ph_sum = self._simple_ema_filter(ph_sum_act, self.power_ph_sum, 0.3)
         self.log(f"Phase-Sum: S={self.power_ph_sum}W")
