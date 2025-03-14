@@ -7,39 +7,58 @@ class PowerMeter(hass.Hass):
         self.log("PowerMeter App Started!")
         self.run_every(self.query_power_meters, "now", 3)  # Runs every 3 second
 
+        self.power_ph_a = 0
+        self.power_ph_b = 0
+        self.power_ph_c = 0
+        self.power_ph_sum = 0
+        self.power_garage = 0
+        self.power_solar = 0
+    
+    def _simple_ema_filter(value, ema, alpha):
+        """Simple Exponential Moving Average filter."""
+        return alpha * value + (1 - alpha) * ema
+    
     def query_power_meters(self, kwargs):
         """Fetch data from both power meters and update sensors."""
-        url1 = "http://10.0.0.210/rpc/EM.GetStatus?id=0"
-        url2 = "http://10.0.0.211/rpc/Switch.GetStatus?id=0"
+        
+        url_3em = "http://10.0.0.210/rpc/EM.GetStatus?id=0"
+        url_1pm = "http://10.0.0.211/rpc/Switch.GetStatus?id=0"
+
+        try:
+            # Read data from Home Assistant sensor
+            self.power_garage = self.get_state("sensor.fritz_dect_200_1_power_consumption")
+        except Exception as e:
+            self.log(f"Error fetching sensor.fritz_dect_200_1_power_consumption: {e}")
+            self.power_garage = 0
 
         # Query first URL (EM.GetStatus)
         try:
-            response1 = requests.get(url1, timeout=2)
+            response1 = requests.get(url_3em, timeout=2)
             data1 = response1.json()
-            a_act_power = data1.get("a_act_power", 0)
-            b_act_power = data1.get("b_act_power", 0)
-            c_act_power = data1.get("c_act_power", 0)
+            power_ph_a = data1.get("a_act_power", 0)
+            power_ph_b = data1.get("b_act_power", 0)
+            power_ph_c = data1.get("c_act_power", 0)
 
             # Update Home Assistant sensors
             #self.set_state("sensor.a_act_power", state=a_act_power, unit_of_measurement="W")
             #self.set_state("sensor.b_act_power", state=b_act_power, unit_of_measurement="W")
             #self.set_state("sensor.c_act_power", state=c_act_power, unit_of_measurement="W")
 
-            self.log(f"Updated Power Sensors: A={a_act_power}W, B={b_act_power}W, C={c_act_power}W")
+            #self.log(f"3EM: A={power_ph_a}W, B={power_ph_b}W, C={power_ph_c}W", G={power_garage}W")
 
         except Exception as e:
-            self.log(f"Error fetching EM.GetStatus: {e}")
+            self.log(f"Error fetching 3EM.GetStatus: {e}")
 
         # Query second URL (Switch.GetStatus)
         try:
-            response2 = requests.get(url2, timeout=2)
+            response2 = requests.get(url_1pm, timeout=2)
             data2 = response2.json()
-            apower = data2.get("apower", 0)
+            power_solar = data2.get("apower", 0)
 
-            # Update Home Assistant sensor
-            #self.set_state("sensor.apower", state=apower, unit_of_measurement="W")
-
-            self.log(f"Updated Switch Power Sensor: apower={apower}W")
+            #self.log(f"1PM: S={power_solar}W")
 
         except Exception as e:
-            self.log(f"Error fetching Switch.GetStatus: {e}")
+            self.log(f"Error fetching 1PM.GetStatus: {e}")
+
+        self.power_ph_sum = self._simple_ema_filter(power_ph_a + power_ph_b + power_ph_c + self.power_garage, self.power_ph_sum, 0.3)
+        self.log(f"Phase-Sum: S={self.power_ph_sum}W")
