@@ -10,9 +10,6 @@ class PowerMeter(hass.Hass):
         self.entidy_id_garage = "sensor.fritz_dect_200_1_power"
         self.log(f"{self.get_entity(self.entidy_id_garage)}")
 
-        self.power_ph_a = 0.0
-        self.power_ph_b = 0.0
-        self.power_ph_c = 0.0
         self.power_ph_sum = 0.0
         self.power_garage = 0.0
         self.power_solar = 0.0
@@ -64,7 +61,14 @@ class PowerMeter(hass.Hass):
         except Exception as e:
             self.log(f"Error fetching 1PM.GetStatus: {e}")
 
-        ph_sum_act = power_ph_a + power_ph_b + power_ph_c
-        self.log(f"Phase-Sum_raw: S={ph_sum_act}W")
+        ph_sum_act = round(power_ph_a + power_ph_b + power_ph_c + self.power_garage, 1)
         #self.power_ph_sum = self._simple_ema_filter(ph_sum_act, self.power_ph_sum, 0.8)
         #self.log(f"Phase-Sum_flt: F={self.power_ph_sum}W")
+        if ph_sum_act > 0:
+            power_imp = ph_sum_act
+            power_exp = 0.0
+        else:
+            power_imp = 0.0
+            power_exp = abs(ph_sum_act)
+        #
+        self.log(f"Power: S={ph_sum_act}W, I={power_imp}W, E={power_exp}W")
