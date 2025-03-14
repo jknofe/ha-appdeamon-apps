@@ -82,4 +82,4 @@ class PowerMeter(hass.Hass):
         # round and limit power consumption to 0.0W
         self.power_con = max(0.0, round(power_con, 1))
 
-        self.log(f"S={round(self.power_ph_sum,1)}W, I={power_imp}W, E={power_exp}W", C={self.power_con}W")
+        self.log(f"S={round(self.power_ph_sum,1)}W, I={power_imp}W, E={power_exp}W, C={self.power_con}W")
