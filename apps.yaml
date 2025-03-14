@@ -1,3 +1,7 @@
+---
+hello_world:
+  module: Hello
+  class: HelloWorld
 power_meter:
   module: PowerMeter
   class: PowerMeter
