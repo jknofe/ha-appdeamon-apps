@@ -26,15 +26,15 @@ class PowerMeter(hass.Hass):
 
         try:
             # Read data from Home Assistant sensor
-            self.power_garage = self.get_state("sensor.fritz_dect_200_1_power_consumption")
+            self.power_garage = float(self.get_state("sensor.fritz_dect_200_1_power"))
             self.log(f"Garage: G={self.power_garage}W")
         except Exception as e:
-            self.log(f"Error fetching sensor.fritz_dect_200_1_power_consumption: {e}")
+            self.log(f"Error fetching sensor.fritz_dect_200_1_power: {e}")
             self.power_garage = 0
 
         # Query first URL (EM.GetStatus)
         try:
-            response1 = requests.get(url_3em, timeout=1)
+            response1 = requests.get(url_3em, timeout=1.25)
             data1 = response1.json()
             power_ph_a = float(data1.get("a_act_power", 0))
             power_ph_b = float(data1.get("b_act_power", 0))
@@ -52,7 +52,7 @@ class PowerMeter(hass.Hass):
 
         # Query second URL (Switch.GetStatus)
         try:
-            response2 = requests.get(url_1pm, timeout=1)
+            response2 = requests.get(url_1pm, timeout=1.25)
             data2 = response2.json()
             power_solar = data2.get("apower", 0)
 
@@ -63,5 +63,5 @@ class PowerMeter(hass.Hass):
 
         ph_sum_act = power_ph_a + power_ph_b + power_ph_c
         self.log(f"Phase-Sum_raw: S={ph_sum_act}W")
-        self.power_ph_sum = self._simple_ema_filter(ph_sum_act, self.power_ph_sum, 0.8)
-        self.log(f"Phase-Sum_flt: F={self.power_ph_sum}W")
+        #self.power_ph_sum = self._simple_ema_filter(ph_sum_act, self.power_ph_sum, 0.8)
+        #self.log(f"Phase-Sum_flt: F={self.power_ph_sum}W")
