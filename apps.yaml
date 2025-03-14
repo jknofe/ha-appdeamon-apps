@@ -1,0 +1,3 @@
+power_meter:
+  module: PowerMeter
+  class: PowerMeter
