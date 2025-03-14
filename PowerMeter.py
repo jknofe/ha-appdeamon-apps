@@ -14,7 +14,7 @@ class PowerMeter(hass.Hass):
         self.power_garage = 0.0
         self.power_solar = 0.0
     
-    def _simple_ema_filter(value, ema, alpha):
+    def _simple_ema_filter(self, value, ema, alpha):
         """Simple Exponential Moving Average filter."""
         return alpha * value + (1 - alpha) * ema
     
