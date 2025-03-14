@@ -57,15 +57,15 @@ class PowerMeter(hass.Hass):
         try:
             response2 = requests.get(url_1pm, timeout=1.25)
             data2 = response2.json()
-            power_solar = data2.get("apower", 0)
-
+            self.power_solar = data2.get("apower", 0)
             #self.log(f"1PM: S={power_solar}W")
-
         except Exception as e:
             self.log(f"Error fetching 1PM.GetStatus: {e}")
 
+        # calculate phase sum
         ph_sum_act = power_ph_a + power_ph_b + power_ph_c + self.power_garage
         self.power_ph_sum = self._raising_ema_filter(ph_sum_act, self.power_ph_sum, 0.8)
+        
         # calculate power import/export
         if self.power_ph_sum > 0:
             power_imp = round(self.power_ph_sum, 1)
@@ -73,5 +73,13 @@ class PowerMeter(hass.Hass):
         else:
             power_imp = 0.0
             power_exp = round(abs(self.power_ph_sum), 1)
-        #
-        self.log(f"Power: S={round(self.power_ph_sum,1)}W, I={power_imp}W, E={power_exp}W")
+        
+        # caclulate power consumption
+        if power_exp > 0:
+            power_con = self.power_solar - power_exp
+        else:
+            power_con = self.power_solar + power_imp   
+        # round and limit power consumption to 0.0W
+        self.power_con = max(0.0, round(power_con, 1))
+
+        self.log(f"S={round(self.power_ph_sum,1)}W, I={power_imp}W, E={power_exp}W", C={self.power_con}W")
