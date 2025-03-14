@@ -7,6 +7,9 @@ class PowerMeter(hass.Hass):
         self.log("PowerMeter App Started!")
         self.run_every(self.query_power_meters, "now", 2)  # Runs every 3 second
 
+        self.entidy_id_garage = "sensor.fritz_dect_200_1_power"
+        self.log(f"{self.get_entity(self.entidy_id_garage)}")
+
         self.power_ph_a = 0.0
         self.power_ph_b = 0.0
         self.power_ph_c = 0.0
@@ -26,18 +29,14 @@ class PowerMeter(hass.Hass):
 
         try:
             # Read data from Home Assistant sensor
-            # self.power_garage = float(self.get_state("sensor.fritz_dect_200_1_power"))
-            #self.power_garage = self.get_state("sensor.fritz_dect_200_1_power")
-            #self.log(f"Garage: G={self.power_garage}W")
-            entidy_garage = "sensor.fritz_dect_200_1_power"
-            self.log(f"{self.get_entity(entidy_garage)}")
-
-            self.log(f"Garage G={self.get_state(entidy_garage)}W")
-
-
+            try:
+                self.power_garage = float(self.get_state(self.entidy_id_garage))
+            except ValueError:
+                self.power_garage = 0.0
+            self.log(f"Garage G={self.power_garage)}W")
         except Exception as e:
             self.log(f"Error fetching sensor.fritz_dect_200_1_power: {e}")
-            self.power_garage = 0
+            self.power_garage = 0.0
 
         # Query first URL (EM.GetStatus)
         try:
