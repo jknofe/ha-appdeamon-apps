@@ -16,10 +16,11 @@ class PowerMeter(hass.Hass):
     
     def _raising_ema_filter(self, value, ema, alpha):
         """Simple Exponential Moving Average filter only on raising values."""
-        if value > ema:
-            return alpha * value + (1 - alpha) * ema
-        else:
+        # follow falling values fast, filter rising values and falling which drop less than 10%
+        if value < ema * 0.9:
             return value
+        else:
+            return alpha * value + (1 - alpha) * ema
     
     def query_power_meters(self, kwargs):
         """Fetch data from both power meters and update sensors."""
