@@ -64,14 +64,14 @@ class PowerMeter(hass.Hass):
         except Exception as e:
             self.log(f"Error fetching 1PM.GetStatus: {e}")
 
-        ph_sum_act = round(power_ph_a + power_ph_b + power_ph_c + self.power_garage, 1)
+        ph_sum_act = power_ph_a + power_ph_b + power_ph_c + self.power_garage
         self.power_ph_sum = self._raising_ema_filter(ph_sum_act, self.power_ph_sum, 0.8)
         # calculate power import/export
         if self.power_ph_sum > 0:
-            power_imp = self.power_ph_sum
+            power_imp = round(self.power_ph_sum, 1)
             power_exp = 0.0
         else:
             power_imp = 0.0
-            power_exp = abs(self.power_ph_sum)
+            power_exp = round(abs(self.power_ph_sum), 1)
         #
-        self.log(f"Power: S={self.power_ph_sum}W, I={power_imp}W, E={power_exp}W")
+        self.log(f"Power: S={round(self.power_ph_sum,1)}W, I={power_imp}W, E={power_exp}W")
