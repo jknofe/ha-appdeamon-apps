@@ -85,5 +85,6 @@ class PowerMeter(hass.Hass):
             power_con = self.power_solar + power_imp   
         # round and limit power consumption to 0.0W
         self.power_con = max(0.0, round(power_con, 1))
-
+        # set state of new sensor
+        self.set_state("sensor.power_consumption_new", state=self.power_con, unit_of_measurement="W")
         self.log(f"P={round(self.power_ph_sum,1)}W, I={power_imp}W, E={power_exp}W, S={self.power_solar} C={self.power_con}W")
