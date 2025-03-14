@@ -52,7 +52,7 @@ class PowerMeter(hass.Hass):
 
         # Query second URL (Switch.GetStatus)
         try:
-            response2 = requests.get(url_1pm, timeout=2)
+            response2 = requests.get(url_1pm, timeout=1)
             data2 = response2.json()
             power_solar = data2.get("apower", 0)
 
