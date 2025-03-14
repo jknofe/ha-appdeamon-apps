@@ -21,9 +21,9 @@ class PowerMeter(hass.Hass):
             c_act_power = data1.get("c_act_power", 0)
 
             # Update Home Assistant sensors
-            self.set_state("sensor.a_act_power", state=a_act_power, unit_of_measurement="W")
-            self.set_state("sensor.b_act_power", state=b_act_power, unit_of_measurement="W")
-            self.set_state("sensor.c_act_power", state=c_act_power, unit_of_measurement="W")
+            #self.set_state("sensor.a_act_power", state=a_act_power, unit_of_measurement="W")
+            #self.set_state("sensor.b_act_power", state=b_act_power, unit_of_measurement="W")
+            #self.set_state("sensor.c_act_power", state=c_act_power, unit_of_measurement="W")
 
             self.log(f"Updated Power Sensors: A={a_act_power}W, B={b_act_power}W, C={c_act_power}W")
 
@@ -37,7 +37,7 @@ class PowerMeter(hass.Hass):
             apower = data2.get("apower", 0)
 
             # Update Home Assistant sensor
-            self.set_state("sensor.apower", state=apower, unit_of_measurement="W")
+            #self.set_state("sensor.apower", state=apower, unit_of_measurement="W")
 
             self.log(f"Updated Switch Power Sensor: apower={apower}W")
 
