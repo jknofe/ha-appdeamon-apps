@@ -26,7 +26,8 @@ class PowerMeter(hass.Hass):
 
         try:
             # Read data from Home Assistant sensor
-            self.power_garage = float(self.get_state("sensor.fritz_dect_200_1_power"))
+            # self.power_garage = float(self.get_state("sensor.fritz_dect_200_1_power"))
+            self.power_garage = hass.states.get("sensor.fritz_dect_200_1_power").state
             self.log(f"Garage: G={self.power_garage}W")
         except Exception as e:
             self.log(f"Error fetching sensor.fritz_dect_200_1_power: {e}")
