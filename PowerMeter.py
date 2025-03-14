@@ -14,9 +14,12 @@ class PowerMeter(hass.Hass):
         self.power_garage = 0.0
         self.power_solar = 0.0
     
-    def _simple_ema_filter(self, value, ema, alpha):
-        """Simple Exponential Moving Average filter."""
-        return alpha * value + (1 - alpha) * ema
+    def _raising_ema_filter(self, value, ema, alpha):
+        """Simple Exponential Moving Average filter only on raising values."""
+        if value > ema:
+            return alpha * value + (1 - alpha) * ema
+        else:
+            return value
     
     def query_power_meters(self, kwargs):
         """Fetch data from both power meters and update sensors."""
@@ -27,9 +30,9 @@ class PowerMeter(hass.Hass):
         try:
             # Read data from Home Assistant sensor
             self.power_garage = float(self.get_state(self.entidy_id_garage))
-            self.log(f"Garage G={self.power_garage}W")
+            # self.log(f"Garage G={self.power_garage}W")
         except (ValueError, Exception) as e:
-            self.log(f"Error fetching sensor.fritz_dect_200_1_power: {e}")
+            # self.log(f"Error fetching sensor.fritz_dect_200_1_power: {e}")
             self.power_garage = 0.0
 
         # Query first URL (EM.GetStatus)
@@ -62,13 +65,13 @@ class PowerMeter(hass.Hass):
             self.log(f"Error fetching 1PM.GetStatus: {e}")
 
         ph_sum_act = round(power_ph_a + power_ph_b + power_ph_c + self.power_garage, 1)
-        #self.power_ph_sum = self._simple_ema_filter(ph_sum_act, self.power_ph_sum, 0.8)
-        #self.log(f"Phase-Sum_flt: F={self.power_ph_sum}W")
-        if ph_sum_act > 0:
-            power_imp = ph_sum_act
+        self.power_ph_sum = self._raising_ema_filter(ph_sum_act, self.power_ph_sum, 0.8)
+        # calculate power import/export
+        if self.power_ph_sum > 0:
+            power_imp = self.power_ph_sum
             power_exp = 0.0
         else:
             power_imp = 0.0
-            power_exp = abs(ph_sum_act)
+            power_exp = abs(self.power_ph_sum)
         #
-        self.log(f"Power: S={ph_sum_act}W, I={power_imp}W, E={power_exp}W")
+        self.log(f"Power: S={self.power_ph_sum}W, I={power_imp}W, E={power_exp}W")
