@@ -25,7 +25,7 @@ class PowerMeter(hass.Hass):
         #
         self.power_solar = 0.0
            
-    def _small_change_ema_filter(self, cur_value, prev_value, alpha=0.6, threshold=25):
+    def _small_change_ema_filter(self, cur_value, prev_value, alpha=0.6, threshold=60):
         """Simple Exponential Moving Average filter only on small changes."""
         change = abs(cur_value - prev_value)
         if change < threshold:
