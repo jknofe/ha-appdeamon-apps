@@ -86,10 +86,10 @@ class PowerMeter(hass.Hass):
 
         # set states of new sensors
         ha_sensor_mapping = {
-            "sensor.power_consumption_new": (self.power_con, "Power Consumption New"),
-            "sensor.power_import_new": (power_imp, "Power Import New"),
-            "sensor.power_export_new": (power_exp, "Power Export New"),
-            "sensor.power_solargen_new": (self.power_solar, "Power Solar Gen New")
+            "sensor.power_consumption": (self.power_con, "Power Consumption"),
+            "sensor.power_import": (power_imp, "Power Import"),
+            "sensor.power_export": (power_exp, "Power Export"),
+            "sensor.power_solargen": (self.power_solar, "Power Solar Generation"),
         }
         # Update sensors
         for sensor_id, (state, friendly_name) in ha_sensor_mapping.items():
