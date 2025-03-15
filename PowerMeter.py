@@ -98,4 +98,4 @@ class PowerMeter(hass.Hass):
                    device_class="power",
                    friendly_name=friendly_name)
         
-        self.log(f"P={round(self.power_ph_sum,1)}W, I={power_imp}W, E={power_exp}W, S={self.power_solar} C={self.power_con}W")
+        # self.log(f"P={round(self.power_ph_sum,1)}W, I={power_imp}W, E={power_exp}W, S={self.power_solar} C={self.power_con}W")
