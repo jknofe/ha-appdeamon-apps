@@ -14,14 +14,14 @@ class PowerMeter(hass.Hass):
         self.power_garage = 0.0
         self.power_solar = 0.0
     
-    def _raising_ema_filter(self, value, ema, alpha):
-        """Simple Exponential Moving Average filter only on raising values."""
-        # follow falling values fast, filter rising values and falling which drop less than 10%
-        if value < ema * 0.9:
-            return value
+    def _small_change_ema_filter(self, cur_value, prev_value, alpha, threshold=25):
+        """Simple Exponential Moving Average filter only on small changes."""
+        change = abs(cur_value - prev_value)
+        if change < threshold:
+            return alpha * cur_value + (1 - alpha) * prev_value
         else:
-            return alpha * value + (1 - alpha) * ema
-    
+            return cur_value
+        
     def query_power_meters(self, kwargs):
         """Fetch data from both power meters and update sensors."""
         
@@ -69,7 +69,7 @@ class PowerMeter(hass.Hass):
 
         # calculate phase sum
         ph_sum_act = power_ph_a + power_ph_b + power_ph_c + self.power_garage
-        self.power_ph_sum = self._raising_ema_filter(ph_sum_act, self.power_ph_sum, 0.8)
+        self.power_ph_sum = self._small_change_ema_filter(ph_sum_act, self.power_ph_sum, 0.6)
         
         # calculate power import/export
         if self.power_ph_sum > 0:
@@ -92,4 +92,4 @@ class PowerMeter(hass.Hass):
                         unit_of_measurement="W",
                         device_class="power",
                         friendly_name="Power Consumption New")
-        self.log(f"P={round(self.power_ph_sum,1)}W, I={power_imp}W, E={power_exp}W, S={self.power_solar} C={self.power_con}W")
+        # self.log(f"P={round(self.power_ph_sum,1)}W, I={power_imp}W, E={power_exp}W, S={self.power_solar} C={self.power_con}W")
