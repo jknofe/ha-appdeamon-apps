@@ -13,7 +13,7 @@ class PowerMeter(hass.Hass):
         
         # URLs for the power meters
         self.url_3em = "http://10.0.0.210/rpc/EM.GetStatus?id=0"
-        self.url_1pm = "http://10.0.0.211/rpc/Switch.GetStatus?id=0"
+        self.url_1pm = "http://10.0.0.214/rpc/PM1.GetStatus?id=0"
         
         #
         self.power_ph_sum = 0.0
@@ -98,4 +98,4 @@ class PowerMeter(hass.Hass):
                    device_class="power",
                    friendly_name=friendly_name)
         
-        # self.log(f"P={round(self.power_ph_sum,1)}W, I={power_imp}W, E={power_exp}W, S={self.power_solar} C={self.power_con}W")
+        self.log(f"P={round(self.power_ph_sum,1)}W, I={power_imp}W, E={power_exp}W, S={self.power_solar} C={self.power_con}W")
