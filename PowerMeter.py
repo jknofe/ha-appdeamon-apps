@@ -57,7 +57,7 @@ class PowerMeter(hass.Hass):
         try:
             response2 = requests.get(self.url_1pm, timeout=1.25)
             data2 = response2.json()
-            self.power_solar = float(data2.get("apower", 0))
+            self.power_solar = float(abs((data2.get("apower", 0))))
             #self.log(f"1PM: S={power_solar}W")
         except (ValueError, Exception) as e:
             self.log(f"Error fetching 1PM.GetStatus: {e}")
