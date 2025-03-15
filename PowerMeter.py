@@ -6,10 +6,16 @@ class PowerMeter(hass.Hass):
         """Initialize the app and set up periodic polling."""
         self.log("PowerMeter App Started!")
         self.run_every(self.query_power_meters, "now", 2)  # Runs every 3 second
-
+        
+        # Entity IDs
         self.entidy_id_garage = "sensor.fritz_dect_200_1_power"
         self.log(f"{self.get_entity(self.entidy_id_garage)}")
-
+        
+        # URLs for the power meters
+        self.url_3em = "http://10.0.0.210/rpc/EM.GetStatus?id=0"
+        self.url_1pm = "http://10.0.0.211/rpc/Switch.GetStatus?id=0"
+        
+        #
         self.power_ph_sum = 0.0
         self.power_garage = 0.0
         self.power_solar = 0.0
@@ -25,8 +31,7 @@ class PowerMeter(hass.Hass):
     def query_power_meters(self, kwargs):
         """Fetch data from both power meters and update sensors."""
         
-        url_3em = "http://10.0.0.210/rpc/EM.GetStatus?id=0"
-        url_1pm = "http://10.0.0.211/rpc/Switch.GetStatus?id=0"
+
 
         try:
             # Read data from Home Assistant sensor
@@ -38,7 +43,7 @@ class PowerMeter(hass.Hass):
 
         # Query first URL (EM.GetStatus)
         try:
-            response1 = requests.get(url_3em, timeout=1.25)
+            response1 = requests.get(self.url_3em, timeout=1.25)
             data1 = response1.json()
             power_ph_a = float(data1.get("a_act_power", 0))
             power_ph_b = float(data1.get("b_act_power", 0))
@@ -59,7 +64,7 @@ class PowerMeter(hass.Hass):
 
         # Query second URL (Switch.GetStatus)
         try:
-            response2 = requests.get(url_1pm, timeout=1.25)
+            response2 = requests.get(self.url_1pm, timeout=1.25)
             data2 = response2.json()
             self.power_solar = float(data2.get("apower", 0))
             #self.log(f"1PM: S={power_solar}W")
@@ -86,10 +91,24 @@ class PowerMeter(hass.Hass):
             power_con = self.power_solar + power_imp   
         # round and limit power consumption to 0.0W
         self.power_con = max(0.0, round(power_con, 1))
+        
         # set state of new sensor
         self.set_state("sensor.power_consumption_new", state=self.power_con,
                         state_class="measurement",
                         unit_of_measurement="W",
                         device_class="power",
                         friendly_name="Power Consumption New")
+    
+        self.set_state("sensor.power_import_new", state=power_imp,
+                        state_class="measurement",
+                        unit_of_measurement="W",
+                        device_class="power",
+                        friendly_name="Power Import New")
+        
+        self.set_state("sensor.power_export_new", state=power_exp,
+                        state_class="measurement",
+                        unit_of_measurement="W",
+                        device_class="power",
+                        friendly_name="Power Export New")
+        
         # self.log(f"P={round(self.power_ph_sum,1)}W, I={power_imp}W, E={power_exp}W, S={self.power_solar} C={self.power_con}W")
