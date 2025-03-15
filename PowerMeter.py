@@ -19,8 +19,8 @@ class PowerMeter(hass.Hass):
         self.power_ph_sum = 0.0
         self.power_garage = 0.0
         self.power_solar = 0.0
-    
-    def _small_change_ema_filter(self, cur_value, prev_value, alpha, threshold=25):
+           
+    def _small_change_ema_filter(self, cur_value, prev_value, alpha=0.6, threshold=25):
         """Simple Exponential Moving Average filter only on small changes."""
         change = abs(cur_value - prev_value)
         if change < threshold:
@@ -31,8 +31,6 @@ class PowerMeter(hass.Hass):
     def query_power_meters(self, kwargs):
         """Fetch data from both power meters and update sensors."""
         
-
-
         try:
             # Read data from Home Assistant sensor
             self.power_garage = float(self.get_state(self.entidy_id_garage))
@@ -48,14 +46,7 @@ class PowerMeter(hass.Hass):
             power_ph_a = float(data1.get("a_act_power", 0))
             power_ph_b = float(data1.get("b_act_power", 0))
             power_ph_c = float(data1.get("c_act_power", 0))
-
-            # Update Home Assistant sensors
-            #self.set_state("sensor.a_act_power", state=a_act_power, unit_of_measurement="W")
-            #self.set_state("sensor.b_act_power", state=b_act_power, unit_of_measurement="W")
-            #self.set_state("sensor.c_act_power", state=c_act_power, unit_of_measurement="W")
-
             #self.log(f"3EM: A={power_ph_a}W, B={power_ph_b}W, C={power_ph_c}W", G={power_garage}W")
-
         except (ValueError, Exception) as e:
             self.log(f"Error fetching 3EM.GetStatus: {e}")
             power_ph_a = 0.0
@@ -74,7 +65,7 @@ class PowerMeter(hass.Hass):
 
         # calculate phase sum
         ph_sum_act = power_ph_a + power_ph_b + power_ph_c + self.power_garage
-        self.power_ph_sum = self._small_change_ema_filter(ph_sum_act, self.power_ph_sum, 0.6)
+        self.power_ph_sum = self._small_change_ema_filter(ph_sum_act, self.power_ph_sum)
         
         # calculate power import/export
         if self.power_ph_sum > 0:
@@ -91,24 +82,20 @@ class PowerMeter(hass.Hass):
             power_con = self.power_solar + power_imp   
         # round and limit power consumption to 0.0W
         self.power_con = max(0.0, round(power_con, 1))
-        
-        # set state of new sensor
-        self.set_state("sensor.power_consumption_new", state=self.power_con,
-                        state_class="measurement",
-                        unit_of_measurement="W",
-                        device_class="power",
-                        friendly_name="Power Consumption New")
-    
-        self.set_state("sensor.power_import_new", state=power_imp,
-                        state_class="measurement",
-                        unit_of_measurement="W",
-                        device_class="power",
-                        friendly_name="Power Import New")
-        
-        self.set_state("sensor.power_export_new", state=power_exp,
-                        state_class="measurement",
-                        unit_of_measurement="W",
-                        device_class="power",
-                        friendly_name="Power Export New")
+
+        # set states of new sensors
+        ha_sensor_mapping = {
+            "sensor.power_consumption_new": (self.power_con, "Power Consumption New"),
+            "sensor.power_import_new": (power_imp, "Power Import New"),
+            "sensor.power_export_new": (power_exp, "Power Export New"),
+            "sensor.power_solargen_new": (self.power_solar, "Power Solar Gen New")
+        }
+        # Update sensors
+        for sensor_id, (state, friendly_name) in ha_sensor_mapping.items():
+            self.set_state(sensor_id, state=state,
+                   state_class="measurement",
+                   unit_of_measurement="W",
+                   device_class="power",
+                   friendly_name=friendly_name)
         
         # self.log(f"P={round(self.power_ph_sum,1)}W, I={power_imp}W, E={power_exp}W, S={self.power_solar} C={self.power_con}W")
