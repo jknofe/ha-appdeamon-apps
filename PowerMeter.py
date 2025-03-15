@@ -15,9 +15,14 @@ class PowerMeter(hass.Hass):
         self.url_3em = "http://10.0.0.210/rpc/EM.GetStatus?id=0"
         self.url_1pm = "http://10.0.0.214/rpc/PM1.GetStatus?id=0"
         
-        #
+        # initialize variables
         self.power_ph_sum = 0.0
+        self.power_ph_a = 0.0
+        self.power_ph_b = 0.0
+        self.power_ph_c = 0.0
+        #
         self.power_garage = 0.0
+        #
         self.power_solar = 0.0
            
     def _small_change_ema_filter(self, cur_value, prev_value, alpha=0.6, threshold=25):
@@ -41,30 +46,26 @@ class PowerMeter(hass.Hass):
 
         # Query first URL (EM.GetStatus)
         try:
-            response1 = requests.get(self.url_3em, timeout=1.25)
+            response1 = requests.get(self.url_3em, timeout=1.0)
             data1 = response1.json()
-            power_ph_a = float(data1.get("a_act_power", 0))
-            power_ph_b = float(data1.get("b_act_power", 0))
-            power_ph_c = float(data1.get("c_act_power", 0))
-            #self.log(f"3EM: A={power_ph_a}W, B={power_ph_b}W, C={power_ph_c}W", G={power_garage}W")
-        except (ValueError, Exception) as e:
+            self.power_ph_a = float(data1.get("a_act_power", 0))
+            self.power_ph_b = float(data1.get("b_act_power", 0))
+            self.power_ph_c = float(data1.get("c_act_power", 0))
+            #self.log(f"3EM: A={self.power_ph_a}W, B={self.power_ph_b}W, C={self.power_ph_c}W", G={power_garage}W")
+        except Exception as e:
             self.log(f"Error fetching 3EM.GetStatus: {e}")
-            power_ph_a = 0.0
-            power_ph_b = 0.0
-            power_ph_c = 0.0
 
-        # Query second URL (Switch.GetStatus)
+        # Query second URL (PM1.GetStatus)
         try:
-            response2 = requests.get(self.url_1pm, timeout=1.25)
+            response2 = requests.get(self.url_1pm, timeout=1.0)
             data2 = response2.json()
             self.power_solar = float(abs((data2.get("apower", 0))))
             #self.log(f"1PM: S={power_solar}W")
-        except (ValueError, Exception) as e:
+        except Exception as e:
             self.log(f"Error fetching 1PM.GetStatus: {e}")
-            self.power_solar = 0.0
 
         # calculate phase sum
-        ph_sum_act = power_ph_a + power_ph_b + power_ph_c + self.power_garage
+        ph_sum_act = self.power_ph_a + self.power_ph_b + self.power_ph_c + self.power_garage
         self.power_ph_sum = self._small_change_ema_filter(ph_sum_act, self.power_ph_sum)
         
         # calculate power import/export
