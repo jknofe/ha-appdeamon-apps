@@ -65,6 +65,8 @@ class PowerMeter(hass.Hass):
             #self.log(f"1PM: S={power_solar}W")
         except Exception as e:
             self.log(f"Error fetching 1PM.GetStatus: {e}")
+        # lightly filter low values
+        self.power_solar= self._small_change_ema_filter(self.power_solar, self.power_solar, 0.5, 50)
 
         # calculate phase sum
         ph_sum_act = self.power_ph_a + self.power_ph_b + self.power_ph_c + self.power_garage
@@ -85,7 +87,7 @@ class PowerMeter(hass.Hass):
             power_con = self.power_solar + power_imp   
         # round and limit power consumption to 0.0W
         self.power_con = max(0.0, round(power_con, 1))
-        self.power_con_flt = self._small_change_ema_filter(self.power_con, self.power_con_flt, 0.5, 240)
+        self.power_con_flt = self._small_change_ema_filter(self.power_con, self.power_con_flt, 0.25, 240)
 
         # set states of new sensors
         ha_sensor_mapping = {
