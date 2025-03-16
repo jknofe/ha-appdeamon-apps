@@ -5,7 +5,6 @@ class PowerMeter(hass.Hass):
     def initialize(self):
         """Initialize the app and set up periodic polling."""
         self.log("PowerMeter App Started!")
-        self.run_every(self.query_power_meters, "now", 2)  # Runs every 3 second
         
         # Entity IDs
         self.entidy_id_garage = "sensor.fritz_dect_200_1_power"
@@ -18,15 +17,15 @@ class PowerMeter(hass.Hass):
         # initialize variables
         self.power_con = 0.0
         self.power_con_flt = 0.0
-        self.power_ph_sum = 0.0
+        self.power_garage = 0.0
         self.power_ph_a = 0.0
         self.power_ph_b = 0.0
         self.power_ph_c = 0.0
-        #
-        self.power_garage = 0.0
-        #
+        self.power_ph_sum = 0.0
         self.power_solar = 0.0
-           
+
+        # after initialization, start polling
+        self.run_every(self.query_power_meters, "now", 2)  # Runs every 3 second
     def _small_change_ema_filter(self, cur_value, prev_value, alpha=0.6, threshold=60):
         """Simple Exponential Moving Average filter only on small changes."""
         change = abs(cur_value - prev_value)
