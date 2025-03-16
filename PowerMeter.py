@@ -16,6 +16,8 @@ class PowerMeter(hass.Hass):
         self.url_1pm = "http://10.0.0.214/rpc/PM1.GetStatus?id=0"
         
         # initialize variables
+        self.power_con = 0.0
+        self.power_con_flt = 0.0
         self.power_ph_sum = 0.0
         self.power_ph_a = 0.0
         self.power_ph_b = 0.0
