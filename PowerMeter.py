@@ -32,7 +32,7 @@ class PowerMeter(hass.Hass):
             return alpha * cur_value + (1 - alpha) * prev_value
         else:
             return cur_value
-        
+    
     def query_power_meters(self, kwargs):
         """Fetch data from both power meters and update sensors."""
         
@@ -83,10 +83,12 @@ class PowerMeter(hass.Hass):
             power_con = self.power_solar + power_imp   
         # round and limit power consumption to 0.0W
         self.power_con = max(0.0, round(power_con, 1))
+        self.power_con_flt = self._small_change_ema_filter(self.power_con, self.power_con_flt, 0.5, 240)
 
         # set states of new sensors
         ha_sensor_mapping = {
             "sensor.power_consumption": (self.power_con, "Power Consumption"),
+            "sensor.power_consunption_filtered": (self.power_con_flt, "Power Consumption Filtered"),
             "sensor.power_import": (power_imp, "Power Import"),
             "sensor.power_export": (power_exp, "Power Export"),
             "sensor.power_solargen": (self.power_solar, "Power Solar Generation"),
