@@ -85,7 +85,6 @@ class PowerMeter(hass.Hass):
 
             # calculate phase sum
             ph_sum_act = self.power_ph_a + self.power_ph_b + self.power_ph_c + self.power_garage
-            self.power_ph_sum = self._small_change_ema_filter(ph_sum_act, self.power_ph_sum)
 
             # calculate power import/export
             if self.power_ph_sum > 0:
