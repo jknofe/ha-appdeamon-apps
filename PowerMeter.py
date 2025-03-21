@@ -76,6 +76,8 @@ class PowerMeter(hass.Hass):
                 self.power_ph_b = float(data1.get("b_act_power", 0))
                 self.power_ph_c = float(data1.get("c_act_power", 0))
                 #self.log(f"3EM: A={self.power_ph_a}W, B={self.power_ph_b}W, C={self.power_ph_c}W", G={power_garage}W")
+                # reset error counter
+                self.http_error_3em = 0
             except requests.exceptions.RequestException as e:
                 self.http_error_3em += 1
                 if self.http_error_3em > self.http_error_threshold:
@@ -90,6 +92,8 @@ class PowerMeter(hass.Hass):
                 data2 = response2.json()
                 self.power_solar = float(abs((data2.get("apower", 0))))
                 #self.log(f"1PM: S={power_solar}W")
+                # reset error counter
+                self.http_error_1pm = 0
             except requests.exceptions.RequestException as e:
                 self.http_error_1pm += 1
                 if self.http_error_1pm > self.http_error_threshold:
