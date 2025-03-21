@@ -7,14 +7,14 @@ class PowerMeter(hass.Hass):
         self.log("PowerMeter App Started!")
 
         # Entity IDs
-        self.entidy_id_garage = "sensor.fritz_dect_200_1_power"
-        self.log(f"{self.get_entity(self.entidy_id_garage)}")
+        self.entity_id_garage = "sensor.fritz_dect_200_1_power"
+        self.log(f"{self.get_entity(self.entity_id_garage)}")
 
         # URLs for the power meters
         self.url_3em = "http://10.0.0.210/rpc/EM.GetStatus?id=0"
         self.url_1pm = "http://10.0.0.214/rpc/PM1.GetStatus?id=0"
 
-        # request timout
+        # request timeout
         self.timeout = 1.25
 
         # initialize variables
@@ -31,14 +31,14 @@ class PowerMeter(hass.Hass):
         self.http_error_3em = 0
         self.http_error_1pm = 0
         
-        # error counter treshold
-        self.http_error_treshold = 3
+        # error counter threshold
+        self.http_error_threshold = 3
 
         #
         self._is_running = False
 
         # after initialization, start polling
-        self.run_every(self.query_power_meters, "now", 3)  # Runs every 3 second
+        self.run_every(self.query_power_meters, "now", 3)  # Runs every 3 seconds
 
     def _small_change_ema_filter(self, cur_value, prev_value, alpha=0.6, threshold=60):
         """Simple Exponential Moving Average filter only on small changes."""
@@ -62,7 +62,7 @@ class PowerMeter(hass.Hass):
 
             try:
                 # Read data from Home Assistant sensor
-                self.power_garage = float(self.get_state(self.entidy_id_garage))
+                self.power_garage = float(self.get_state(self.entity_id_garage))
                 # self.log(f"Garage G={self.power_garage}W")
             except (ValueError, Exception) as e:
                 # self.log(f"Error fetching sensor.fritz_dect_200_1_power: {e}")
@@ -78,7 +78,7 @@ class PowerMeter(hass.Hass):
                 #self.log(f"3EM: A={self.power_ph_a}W, B={self.power_ph_b}W, C={self.power_ph_c}W", G={power_garage}W")
             except requests.exceptions.RequestException as e:
                 self.http_error_3em += 1
-                if self.http_error_3em > self.http_error_treshold:
+                if self.http_error_3em > self.http_error_threshold:
                     self.log(f"3EM HTTP error: {e}")
                     self.http_error_3em = 0
             except Exception as e:
@@ -92,7 +92,7 @@ class PowerMeter(hass.Hass):
                 #self.log(f"1PM: S={power_solar}W")
             except requests.exceptions.RequestException as e:
                 self.http_error_1pm += 1
-                if self.http_error_1pm > self.http_error_treshold:
+                if self.http_error_1pm > self.http_error_threshold:
                     self.log(f"1PM HTTP error: {e}")
                     self.http_error_1pm = 0
             except Exception as e:
@@ -114,7 +114,7 @@ class PowerMeter(hass.Hass):
                 power_imp = 0.0
                 power_exp = round(abs(self.power_ph_sum), 1)
 
-            # caclulate power consumption
+            # calculate power consumption
             if power_exp > 0:
                 power_con = self.power_solar - power_exp
             else:
@@ -126,7 +126,7 @@ class PowerMeter(hass.Hass):
             # set states of new sensors
             ha_sensor_mapping = {
                 "sensor.power_consumption": (self.power_con, "Power Consumption"),
-                "sensor.power_consunption_filtered": (round(self.power_con_flt, 1), "Power Consumption Filtered"),
+                "sensor.power_consumption_filtered": (round(self.power_con_flt, 1), "Power Consumption Filtered"),
                 "sensor.power_import": (power_imp, "Power Import"),
                 "sensor.power_export": (power_exp, "Power Export"),
                 "sensor.power_solargen": (self.power_solar, "Power Solar Generation"),
