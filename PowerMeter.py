@@ -27,6 +27,13 @@ class PowerMeter(hass.Hass):
         self.power_ph_sum = 0.0
         self.power_solar = 0.0
 
+        # http req error counters
+        self.http_error_3em = 0
+        self.http_error_1pm = 0
+        
+        # error counter treshold
+        self.http_error_treshold = 3
+
         #
         self._is_running = False
 
@@ -69,17 +76,28 @@ class PowerMeter(hass.Hass):
                 self.power_ph_b = float(data1.get("b_act_power", 0))
                 self.power_ph_c = float(data1.get("c_act_power", 0))
                 #self.log(f"3EM: A={self.power_ph_a}W, B={self.power_ph_b}W, C={self.power_ph_c}W", G={power_garage}W")
+            except requests.exceptions.RequestException as e:
+                self.http_error_3em += 1
+                if self.http_error_3em > self.http_error_treshold:
+                    self.log(f"3EM HTTP error: {e}")
+                    self.http_error_3em = 0
             except Exception as e:
-                self.log(f"Error fetching 3EM.GetStatus: {e}")
-
+                self.log(f"3EM unexpected error: {e}")
+            
             # Query second URL (PM1.GetStatus)
             try:
                 response2 = requests.get(self.url_1pm, timeout=self.timeout)
                 data2 = response2.json()
                 self.power_solar = float(abs((data2.get("apower", 0))))
                 #self.log(f"1PM: S={power_solar}W")
+            except requests.exceptions.RequestException as e:
+                self.http_error_1pm += 1
+                if self.http_error_1pm > self.http_error_treshold:
+                    self.log(f"1PM HTTP error: {e}")
+                    self.http_error_1pm = 0
             except Exception as e:
-                self.log(f"Error fetching 1PM.GetStatus: {e}")
+                self.log(f"1PM unexpected error: {e}")
+            
             # lightly filter low values
             self.power_solar= self._small_change_ema_filter(self.power_solar, self.power_solar, 0.5, 50)
 
