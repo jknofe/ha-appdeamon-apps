@@ -14,9 +14,6 @@ class PowerMeter(hass.Hass):
         self.url_3em = "http://10.0.0.210/rpc/EM.GetStatus?id=0"
         self.url_1pm = "http://10.0.0.214/rpc/PM1.GetStatus?id=0"
 
-        # request timeout
-        self.timeout = 1.25
-
         # initialize variables
         self.power_con = 0.0
         self.power_con_flt = 0.0
@@ -27,16 +24,13 @@ class PowerMeter(hass.Hass):
         self.power_ph_sum = 0.0
         self.power_solar = 0.0
 
-        # http req error counters
+        # http error counters handling
+        self.timeout = 1.25
+        self.http_error_threshold = 3
         self.http_error_3em = 0
         self.http_error_1pm = 0
-        
-        # error counter threshold
-        self.http_error_threshold = 3
-
         #
         self._is_running = False
-
         # after initialization, start polling
         self.run_every(self.query_power_meters, "now", 3)  # Runs every 3 seconds
 
@@ -63,7 +57,6 @@ class PowerMeter(hass.Hass):
             try:
                 # Read data from Home Assistant sensor
                 self.power_garage = float(self.get_state(self.entity_id_garage))
-                # self.log(f"Garage G={self.power_garage}W")
             except (ValueError, Exception) as e:
                 # self.log(f"Error fetching sensor.fritz_dect_200_1_power: {e}")
                 self.power_garage = 0.0
