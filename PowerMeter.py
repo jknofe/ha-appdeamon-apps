@@ -88,7 +88,8 @@ class PowerMeter(hass.Hass):
                 self.http_error_1pm = 0
             except requests.exceptions.RequestException as e:
                 self.http_error_1pm += 1
-                if self.http_error_3em > self.http_error_threshold or self.http_error_3em % self.http_error_threshold == 0:
+                # check the 1PM counter (was incorrectly checking 3EM)
+                if self.http_error_1pm > self.http_error_threshold or self.http_error_1pm % self.http_error_threshold == 0:
                     self.log(f"1PM HTTP error: {e}")
             except Exception as e:
                 self.log(f"1PM unexpected error: {e}")
