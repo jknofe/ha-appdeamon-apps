@@ -88,7 +88,7 @@ class PowerMeter(hass.Hass):
                 self.http_error_1pm = 0
             except requests.exceptions.RequestException as e:
                 self.http_error_1pm += 1
-                # check the 1PM counter (was incorrectly checking 3EM)
+                # check the 1PM counter
                 if self.http_error_1pm > self.http_error_threshold or self.http_error_1pm % self.http_error_threshold == 0:
                     self.log(f"1PM HTTP error: {e}")
             except Exception as e:
@@ -127,13 +127,18 @@ class PowerMeter(hass.Hass):
                 "sensor.power_export": (power_exp, "Power Export"),
                 "sensor.power_solargen": (self.power_solar, "Power Solar Generation"),
             }
-            # Update sensors
+            # Update sensors — use explicit attributes dict and string state
             for sensor_id, (state, friendly_name) in ha_sensor_mapping.items():
-                self.set_state(sensor_id, state=state,
-                    state_class="measurement",
-                    unit_of_measurement="W",
-                    device_class="power",
-                    friendly_name=friendly_name)
+                self.set_state(
+                    sensor_id,
+                    state=str(state),  # send state as string to REST API
+                    attributes={
+                        "state_class": "measurement",
+                        "unit_of_measurement": "W",
+                        "device_class": "power",
+                        "friendly_name": friendly_name,
+                    },
+                )
 
             # self.log(f"P={round(self.power_ph_sum,1)}W, I={power_imp}W, E={power_exp}W, S={self.power_solar} C={self.power_con}W")
         except Exception as e:
