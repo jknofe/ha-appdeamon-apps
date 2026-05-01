@@ -12,6 +12,7 @@ import json
 
 import appdaemon.plugins.hass.hassapi as hass
 
+from app_helpers import parse_interval
 from zendure_logic import compute_setpoint
 
 
@@ -21,7 +22,7 @@ class ZendureSetpoint(hass.Hass):
 
     def initialize(self):
         # Config from apps.yaml (see knowledgebase / requirements §7)
-        self.update_interval = self.args.get("update_interval", 20)
+        self.update_interval = parse_interval(self.args.get("update_interval", "20s"))
         self.mqtt_topic_write = self.args["mqtt_topic_write"]
         self.inverter_max_power_default = self.args.get("inverter_max_power_default", 390)
         self.dual_max_power = self.args.get("dual_mode_max_power", 600)

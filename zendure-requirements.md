@@ -43,7 +43,7 @@ Out of scope: the decoder/battery-state stubs, the existing `power_*.py` scripts
 ## 4. `ZendureSetpoint` requirements
 
 ### Cadence and lifecycle
-- **SP-1** Runs every `update_interval` seconds, default 20.
+- **SP-1** Runs every `update_interval`, default `"20s"` (parsed by `app_helpers.parse_interval`).
 - **SP-2** First run starts immediately on `initialize()` (matching `PowerMeter.py`).
 
 ### Inputs
@@ -77,7 +77,7 @@ Out of scope: the decoder/battery-state stubs, the existing `power_*.py` scripts
 ## 5. `ZendureStateMachine` requirements
 
 ### Cadence and lifecycle
-- **SM-1** Runs every `update_interval_minutes` minutes, default 20.
+- **SM-1** Runs every `update_interval`, default `"20min"` (parsed by `app_helpers.parse_interval`).
 - **SM-2** Runs once on `initialize()` after the bypass tracker is set up.
 
 ### Inputs
@@ -130,7 +130,7 @@ Out of scope: the decoder/battery-state stubs, the existing `power_*.py` scripts
 ## 7. Configuration requirements
 
 ### `apps.yaml` (per knowledgebase block)
-- **CFG-1** `update_interval` (s), `update_interval_minutes` (min) for tick cadence.
+- **CFG-1** `update_interval` (duration string or int seconds, parsed by `app_helpers.parse_interval`) for tick cadence in both apps.
 - **CFG-2** `mqtt_topic_write`, `mqtt_topic_read` for the device's MQTT topics.
 - **CFG-3** `inverter_max_power_default`, `dual_mode_max_power`, `dual_mode_solar_margin`, `power_step`, `batt_low_stop`, `power_target_bias_steps` for setpoint constants.
 - **CFG-4** `schedule` (24-slot list), `low_batt_minsoc`, `med_batt_minsoc` for state-machine constants.

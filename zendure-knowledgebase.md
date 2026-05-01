@@ -93,7 +93,7 @@ If a helper is missing or `unknown`/`unavailable`, the app falls back to the `ap
 zendure_setpoint:
   module: ZendureSetpoint
   class: ZendureSetpoint
-  update_interval: 20            # seconds
+  update_interval: "20s"          # parse_interval accepts "20s", "20min", "1h", or bare int
   mqtt_topic_write: "iot/73bkTV/SE7546CU/properties/write"
   inverter_max_power_default: 390
   dual_mode_max_power: 600
@@ -105,7 +105,7 @@ zendure_setpoint:
 zendure_state_machine:
   module: ZendureStateMachine
   class: ZendureStateMachine
-  update_interval_minutes: 20
+  update_interval: "20min"
   mqtt_topic_write: "iot/73bkTV/SE7546CU/properties/write"
   mqtt_topic_read:  "iot/73bkTV/SE7546CU/properties/read"
   schedule:                       # 24-slot list, hour → mode

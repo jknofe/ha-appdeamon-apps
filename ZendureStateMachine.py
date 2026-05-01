@@ -13,6 +13,7 @@ import json
 
 import appdaemon.plugins.hass.hassapi as hass
 
+from app_helpers import parse_interval
 from zendure_logic import is_bypass_active, pick_mode_payload, pick_operation_mode
 
 
@@ -27,7 +28,7 @@ class ZendureStateMachine(hass.Hass):
 
     def initialize(self):
         # Config from apps.yaml (see knowledgebase / requirements §7)
-        self.update_interval_minutes = self.args.get("update_interval_minutes", 20)
+        self.update_interval = parse_interval(self.args.get("update_interval", "20min"))
         self.mqtt_topic_write = self.args["mqtt_topic_write"]
         self.mqtt_topic_read = self.args["mqtt_topic_read"]
         self.schedule = self.args["schedule"]
@@ -45,7 +46,7 @@ class ZendureStateMachine(hass.Hass):
             self.listen_state(self._on_bypass_input_change, entity)
 
         # Periodic tick (SM-1, SM-2)
-        self.run_every(self._tick, "now", self.update_interval_minutes * 60)
+        self.run_every(self._tick, "now", self.update_interval)
         self.log("ZendureStateMachine started")
 
     # ------------------------------------------------------------------
