@@ -5,3 +5,20 @@ hello_world:
 power_meter:
   module: PowerMeter
   class: PowerMeter
+zendure_state_machine:
+  module: ZendureStateMachine
+  class: ZendureStateMachine
+  update_interval_minutes: 20
+  mqtt_topic_write: "iot/73bkTV/SE7546CU/properties/write"
+  mqtt_topic_read:  "iot/73bkTV/SE7546CU/properties/read"
+  schedule:
+    [serve, serve, serve, serve, serve, serve,
+     charge, charge,
+     dual, dual, dual, dual, dual, dual, dual,
+     serve, serve, serve, serve, serve, serve, serve, serve, serve]
+  low_batt_minsoc: 100      # 10 % * 10
+  med_batt_minsoc: 200      # 20 % * 10
+  bypass_tracker:
+    debounce_seconds: 60
+    solar_threshold_w: 50
+    fallback_days_when_missing: 7

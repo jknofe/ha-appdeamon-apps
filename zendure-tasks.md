@@ -49,26 +49,26 @@ Ordered checklist. Implementation only starts after this list is agreed. Compani
 - [x] Test: `old_mode` in {None, 'unknown', 'unavailable'} → treated as same-as-new_mode (no transition payload)
 
 ### 3b. AppDaemon glue (`ZendureStateMachine.py`)
-- [ ] Add `zendure_state_machine` block to `apps.yaml` per knowledgebase
-- [ ] Skeleton: `initialize()`, `run_every` for 20 min cadence + run-on-start
-- [ ] Helper `_get_state_int(entity, default)` mirroring original
-- [ ] Helper `_helper_or_default(helper_id, yaml_key)` for hybrid config
-- [ ] Helper `_dry_run()` reading `input_boolean.zendure_dry_run`
-- [ ] **Bypass tracker**:
-  - [ ] `initialize()` reads `sensor.zendure_bypass_reached_at` to bootstrap `self._last_bypass_at`; if missing/`unknown`/`unavailable` → fall back to `self.datetime() − fallback_days_when_missing` AND immediately `set_state(...)` so the sensor materializes on the dashboard from t=0
-  - [ ] All timestamp writes use `self.datetime().isoformat()` (TZ-aware) with `attributes={'device_class': 'timestamp'}`
-  - [ ] Register `listen_state` on the four bypass-related sensors
-  - [ ] On state event, evaluate `is_bypass_active(...)`; if True and no timer pending → `self.run_in(_confirm_bypass, debounce_seconds)`; if False → cancel pending timer
-  - [ ] `_confirm_bypass`: re-evaluate predicate; if still True, set `self._last_bypass_at = self.datetime()` and `set_state("sensor.zendure_bypass_reached_at", ...)`
-- [ ] **Periodic tick**:
-  - [ ] Read inputs and `old_mode`
-  - [ ] `new_mode = pick_operation_mode(now.hour, schedule)`
-  - [ ] Treat `old_mode` in {None, 'unknown', 'unavailable'} as same-as-`new_mode` (no transition; just write current)
-  - [ ] If mode change → publish MQTT `getAll`; schedule mode payload 5 s later via `self.run_in` (no `time.sleep`)
-  - [ ] Compute `days_since_last_bypass` from `self._last_bypass_at`
-  - [ ] `payload, effective_mode = pick_mode_payload(...)`; publish if any
-  - [ ] Write `zendure.operation_mode` (live) or `sensor.zendure_operation_mode_shadow` — shadow value uses the same raw mode string as the live entity
-  - [ ] Gate every MQTT publish on `not _dry_run()`
+- [x] Add `zendure_state_machine` block to `apps.yaml` per knowledgebase
+- [x] Skeleton: `initialize()`, `run_every` for 20 min cadence + run-on-start
+- [x] Helper `_get_state_int(entity, default)` mirroring original
+- [ ] Helper `_helper_or_default(helper_id, yaml_key)` for hybrid config — N/A for state machine (no HA helpers needed); implemented in setpoint
+- [x] Helper `_dry_run()` reading `input_boolean.zendure_dry_run`
+- [x] **Bypass tracker**:
+  - [x] `initialize()` reads `sensor.zendure_bypass_reached_at` to bootstrap `self._last_bypass_at`; if missing/`unknown`/`unavailable` → fall back to `self.datetime() − fallback_days_when_missing` AND immediately `set_state(...)` so the sensor materializes on the dashboard from t=0
+  - [x] All timestamp writes use `self.datetime().isoformat()` (TZ-aware) with `attributes={'device_class': 'timestamp'}`
+  - [x] Register `listen_state` on the four bypass-related sensors
+  - [x] On state event, evaluate `is_bypass_active(...)`; if True and no timer pending → `self.run_in(_confirm_bypass, debounce_seconds)`; if False → cancel pending timer
+  - [x] `_confirm_bypass`: re-evaluate predicate; if still True, set `self._last_bypass_at = self.datetime()` and `set_state("sensor.zendure_bypass_reached_at", ...)`
+- [x] **Periodic tick**:
+  - [x] Read inputs and `old_mode`
+  - [x] `new_mode = pick_operation_mode(now.hour, schedule)`
+  - [x] Treat `old_mode` in {None, 'unknown', 'unavailable'} as same-as-`new_mode` (no transition; just write current)
+  - [x] If mode change → publish MQTT `getAll`; schedule mode payload 5 s later via `self.run_in` (no `time.sleep`)
+  - [x] Compute `days_since_last_bypass` from `self._last_bypass_at`
+  - [x] `payload, effective_mode = pick_mode_payload(...)`; publish if any
+  - [x] Write `zendure.operation_mode` (live) or `sensor.zendure_operation_mode_shadow` — shadow value uses the same raw mode string as the live entity
+  - [x] Gate every MQTT publish on `not _dry_run()`
 - [ ] Smoke run on HA: load app, watch logs for one cycle and one bypass event; confirm shadow sensor updates and bypass timestamp populates
 
 ## Phase 4 — `ZendureSetpoint`
