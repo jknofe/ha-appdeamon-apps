@@ -57,18 +57,26 @@ Conventions for changes in this repo. Solo dev, direct to `main`, no PRs.
 ```
 ha-appdeamon-apps/
 ├── apps.yaml                       # AppDaemon manifest
-├── PowerMeter.py                   # existing
-├── Hello.py                        # existing
-├── ZendureSetpoint.py              # AppDaemon glue (reads state, calls logic, writes state/MQTT)
+├── PowerMeter.py / Hello.py        # existing
+├── ZendureSetpoint.py              # AppDaemon glue
 ├── ZendureStateMachine.py          # AppDaemon glue
 ├── zendure_logic.py                # pure functions, no AppDaemon imports
 ├── tests/
-│   ├── test_zendure_setpoint.py
-│   └── test_zendure_state_machine.py
-├── zendure-knowledgebase.md
-├── zendure-tasks.md
-└── WORKING-STYLE.md
+│   ├── conftest.py
+│   └── test_zendure_logic.py
+├── .venv/                          # local pytest env (gitignored, AppDaemon-ignored as dotfile)
+├── conftest at tests/conftest.py
+├── *.md (design docs)
+└── .gitignore
 ```
+
+### Why this layout is AppDaemon-correct
+
+- AppDaemon only imports files referenced from `apps.yaml` containing `hass.Hass` subclasses; everything else is invisible to the app loader. So `zendure_logic.py` and `tests/` cause no app-loading interference.
+- The official docs explicitly bless the shared-library-at-top-level pattern: *"Python modules may be imported directly if they are in a directory in which other apps reside."* AppDaemon tracks dependencies via AST so apps reload when shared modules change.
+- AppDaemon auto-ignores any path containing a `.` segment, so `.venv/` is invisible. `tests/` (no dot) is not auto-ignored, but it's also not imported (no entry in `apps.yaml`). If cosmetic warnings ever appear, add `exclude_dirs: [tests]` to `appdaemon.yaml` on the HA host.
+- A `tests/` *with* leading dot would be hidden from AppDaemon AND from pytest's default `norecursedirs`, so we keep the no-dot name.
+- We do not group Zendure files into a `zendure/` package: it would force `apps.yaml` to use `module: zendure.ZendureSetpoint` and break consistency with the flat `PowerMeter.py`.
 
 ## Logging
 
