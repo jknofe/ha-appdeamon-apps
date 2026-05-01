@@ -7,7 +7,7 @@ Conventions for changes in this repo. Solo dev, direct to `main`, no PRs.
 - **Branching**: direct to `main`. No feature branches.
 - **Commit cadence**: one commit per task box in any in-progress `*-tasks.md` (or per other small logical unit). Each commit must leave AppDaemon loadable — no half-edited apps.
 - **Tick boxes** in the same commit that does the work.
-- **Push**: after each phase completes, not after every commit.
+- **Push**: never automatically. The user pushes manually. Do not run `git push` unless explicitly asked.
 - **Subject style**: imperative mood, capital first letter, no period, no `feat:`/`fix:` prefix, name the class when relevant. Examples:
   ```
   Add ZendureStateMachine skeleton with shadow-mode outputs
