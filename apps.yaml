@@ -22,3 +22,14 @@ zendure_state_machine:
     debounce_seconds: 60
     solar_threshold_w: 50
     fallback_days_when_missing: 7
+zendure_setpoint:
+  module: ZendureSetpoint
+  class: ZendureSetpoint
+  update_interval: 20             # seconds
+  mqtt_topic_write: "iot/73bkTV/SE7546CU/properties/write"
+  inverter_max_power_default: 390
+  dual_mode_max_power: 600
+  dual_mode_solar_margin: 60      # half_solar_power = solarInputPower - margin
+  power_step: 30
+  batt_low_stop: 10               # %
+  power_target_bias_steps: 0.5    # subtract this many steps from raw target

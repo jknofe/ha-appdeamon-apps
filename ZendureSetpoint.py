@@ -1,0 +1,154 @@
+"""Zendure SolarFlow output-setpoint controller (every 20 s).
+
+Replaces python_script.zendure_setpoint. Reads consumption / solar / battery
+state, calls compute_setpoint, publishes MQTT only on change.
+
+Pure decision logic lives in zendure_logic.py; this file is the AppDaemon
+glue: read HA state, call the pure function, write HA state, publish MQTT.
+
+See zendure-requirements.md section 4 for the contract.
+"""
+import json
+
+import appdaemon.plugins.hass.hassapi as hass
+
+from zendure_logic import compute_setpoint
+
+
+class ZendureSetpoint(hass.Hass):
+
+    INVERTER_MAX_POWER_HELPER = "input_number.zendure_inverter_max_power"
+
+    def initialize(self):
+        # Config from apps.yaml (see knowledgebase / requirements §7)
+        self.update_interval = self.args.get("update_interval", 20)
+        self.mqtt_topic_write = self.args["mqtt_topic_write"]
+        self.inverter_max_power_default = self.args.get("inverter_max_power_default", 390)
+        self.dual_max_power = self.args.get("dual_mode_max_power", 600)
+        self.dual_solar_margin = self.args.get("dual_mode_solar_margin", 60)
+        self.power_step = self.args.get("power_step", 30)
+        self.batt_low_stop = self.args.get("batt_low_stop", 10)
+        self.power_target_bias_steps = self.args.get("power_target_bias_steps", 0.5)
+
+        self._is_running = False
+
+        # PS-2: bootstrap setpoint_old from the live HA value once, so the
+        # first cycle's change-detect knows what we last published. None on
+        # cold-start forces a publish on the first computed setpoint.
+        self._setpoint_old = self._get_state_int("sensor.zendure_setpoint", default=None)
+
+        self.run_every(self._tick, "now", self.update_interval)
+        self.log("ZendureSetpoint started")
+
+    def _tick(self, kwargs):
+        # CC-5: in-flight reentry guard, mirroring PowerMeter.py.
+        if self._is_running:
+            self.log("Tick already running, skipping")
+            return
+        try:
+            self._is_running = True
+
+            # Read inputs. CC-6: missing / unknown values fall through to defaults.
+            mode = self.get_state("zendure.operation_mode")
+            if mode in (None, "unknown", "unavailable"):
+                mode = "serve"
+
+            power_con = self._get_state_int("sensor.power_consumption")
+            power_sol = self._get_state_int("sensor.hm_400_power")
+            solar_input_power = self._get_state_int("sensor.zendure_mqtt_solarinputpower")
+            electric_level = self._get_state_int("sensor.zendure_mqtt_electriclevel")
+
+            # Hybrid config: helper overrides apps.yaml default if set (CFG-7).
+            inverter_max_power = int(self._helper_or_default(
+                self.INVERTER_MAX_POWER_HELPER,
+                "inverter_max_power_default",
+                self.inverter_max_power_default,
+            ))
+
+            setpoint = compute_setpoint(
+                power_con=power_con,
+                power_sol=power_sol,
+                mode=mode,
+                solar_input_power=solar_input_power,
+                electric_level=electric_level,
+                batt_low_stop=self.batt_low_stop,
+                inverter_max_power=inverter_max_power,
+                dual_max_power=self.dual_max_power,
+                dual_solar_margin=self.dual_solar_margin,
+                power_step=self.power_step,
+                target_bias_steps=self.power_target_bias_steps,
+            )
+
+            self._write_setpoint(setpoint)
+            # SP-13: publish MQTT only on a real change.
+            if self._setpoint_old != setpoint:
+                self._publish_setpoint_mqtt(setpoint)
+                self._setpoint_old = setpoint
+        except Exception as e:
+            self.log(f"Error in _tick: {e}", level="ERROR")
+        finally:
+            self._is_running = False
+
+    def _write_setpoint(self, setpoint):
+        """Shadow write under dry_run, otherwise the live sensor.
+
+        State string formatted as `repr(round(setpoint, 0))` to match the
+        original python_script byte-for-byte (e.g. "30.0"), so shadow vs
+        live charts compare cleanly during the verification window.
+        """
+        state_str = repr(round(setpoint, 0))
+        attrs = {
+            "state_class": "measurement",
+            "unit_of_measurement": "W",
+            "device_class": "power",
+        }
+        if self._dry_run():
+            attrs["friendly_name"] = "Zendure Setpoint (shadow)"
+            self.set_state("sensor.zendure_setpoint_shadow", state=state_str, attributes=attrs)
+        else:
+            attrs["friendly_name"] = "Zendure Setpoint"
+            self.set_state("sensor.zendure_setpoint", state=state_str, attributes=attrs)
+
+    def _publish_setpoint_mqtt(self, setpoint):
+        payload = {"properties": {"outputLimit": setpoint}}
+        payload_str = json.dumps(payload)
+        if self._dry_run():
+            self.log(f"[dry_run] would publish topic={self.mqtt_topic_write} payload={payload_str}")
+            return
+        try:
+            self.call_service(
+                "mqtt/publish", topic=self.mqtt_topic_write, payload=payload_str
+            )
+        except Exception as e:
+            self.log(f"MQTT publish failed: {e}", level="ERROR")
+
+    # ------------------------------------------------------------------
+    # Helpers (mirror ZendureStateMachine; kept inline rather than factored
+    # to keep each app file self-contained and match PowerMeter.py style)
+    # ------------------------------------------------------------------
+
+    def _get_state_int(self, entity_id, default=0):
+        val = self.get_state(entity_id)
+        if val in (None, "unknown", "unavailable"):
+            return default
+        try:
+            return int(float(val))
+        except (ValueError, TypeError):
+            return default
+
+    def _helper_or_default(self, helper_id, yaml_key, default):
+        """Read a HA input_number helper; fall back to apps.yaml then literal."""
+        state = self.get_state(helper_id)
+        if state not in (None, "unknown", "unavailable"):
+            try:
+                return float(state)
+            except (ValueError, TypeError):
+                pass
+        return self.args.get(yaml_key, default)
+
+    def _dry_run(self):
+        """Default to True (safe / shadow) when the helper is missing."""
+        state = self.get_state("input_boolean.zendure_dry_run")
+        if state in (None, "unknown", "unavailable"):
+            return True
+        return state == "on"

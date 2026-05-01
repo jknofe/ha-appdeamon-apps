@@ -86,16 +86,16 @@ Ordered checklist. Implementation only starts after this list is agreed. Compani
 - [x] Test: clamp `0 ≤ setpoint ≤ cap`
 
 ### 4b. AppDaemon glue (`ZendureSetpoint.py`)
-- [ ] Add `zendure_setpoint` block to `apps.yaml`
-- [ ] Skeleton mirroring `PowerMeter.py`: `initialize()`, `_is_running` guard, `run_every(..., 20)`
-- [ ] Reuse helpers `_get_state_int`, `_helper_or_default`, `_dry_run` (factor into a shared module if duplication itches)
-- [ ] Read input sensors and `zendure.operation_mode`
-- [ ] Call `derive_bypass_now(...)` and `compute_setpoint(...)`
-- [ ] Change-detect against `setpoint_old` (read from `sensor.zendure_setpoint` once at startup, then track in-memory)
-- [ ] Write outputs:
+- [x] Add `zendure_setpoint` block to `apps.yaml`
+- [x] Skeleton mirroring `PowerMeter.py`: `initialize()`, `_is_running` guard, `run_every(..., 20)`
+- [x] Reuse helpers `_get_state_int`, `_helper_or_default`, `_dry_run` (kept inline per file for self-containment, matches PowerMeter.py style)
+- [x] Read input sensors and `zendure.operation_mode`
+- [x] Call `compute_setpoint(...)` (`derive_bypass_now` left for future bypass-override; not yet wired since `compute_setpoint` doesn't consume it)
+- [x] Change-detect against `setpoint_old` (read from `sensor.zendure_setpoint` once at startup, then track in-memory)
+- [x] Write outputs:
   - shadow path → `sensor.zendure_setpoint_shadow` (state string formatted as `repr(round(setpoint, 0))` to match live exactly for chart comparison)
   - live path → `sensor.zendure_setpoint` (same formatting) + `mqtt/publish` to `properties/write`
-- [ ] Gate every MQTT publish on `not _dry_run()`
+- [x] Gate every MQTT publish on `not _dry_run()`
 
 ## Phase 5 — Shadow-mode verification (≥ 24 h)
 
