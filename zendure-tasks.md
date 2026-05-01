@@ -31,22 +31,22 @@ Ordered checklist. Implementation only starts after this list is agreed. Compani
 ## Phase 3 — `ZendureStateMachine` (port first, includes bypass tracker)
 
 ### 3a. Pure logic in `zendure_logic.py` + tests
-- [ ] Add `is_bypass_active(electric_level, packstate, outputpackpower, solarinputpower, solar_threshold)` — returns bool
-- [ ] Test: all four conditions met → True
-- [ ] Test: each single condition broken → False (4 cases)
-- [ ] Test: `solarinputpower == solar_threshold` is False (uses strict `>`)
-- [ ] Add `pick_operation_mode(hour, schedule)` — pure lookup
-- [ ] Test: 6:00 → charge, 8:00 → dual, 15:00 → serve, 22:00 → serve
-- [ ] Add `pick_mode_payload(old_mode, new_mode, bypass_now, electric_level, days_since_last_bypass, low_minsoc, med_minsoc)` — returns `(mqtt_payload_or_None, effective_new_mode)`
-- [ ] Test: `→ serve` with `bypass_now` → outputLimit:0, passMode:1, minSoc:low
-- [ ] Test: `→ serve` with `level ≥ 30 ∧ days < 7` → outputLimit:0, minSoc:med
-- [ ] Test: `→ serve` neither → delay (effective_new_mode == old_mode, payload None)
-- [ ] Test: `→ dual` with `level < 20 ∧ days < 7` → delay
-- [ ] Test: `→ dual` with `level ≥ 20` → no payload, mode advances
-- [ ] Test: `→ charge` always emits charge payload
-- [ ] Test: no mode change but `bypass_now` → emits bypass-low-stop payload
-- [ ] Test: no mode change and not bypass → None, None
-- [ ] Test: `old_mode` in {None, 'unknown', 'unavailable'} → treated as same-as-new_mode (no transition payload)
+- [x] Add `is_bypass_active(electric_level, packstate, outputpackpower, solarinputpower, solar_threshold)` — returns bool
+- [x] Test: all four conditions met → True
+- [x] Test: each single condition broken → False (4 cases)
+- [x] Test: `solarinputpower == solar_threshold` is False (uses strict `>`)
+- [x] Add `pick_operation_mode(hour, schedule)` — pure lookup
+- [x] Test: 6:00 → charge, 8:00 → dual, 15:00 → serve, 22:00 → serve
+- [x] Add `pick_mode_payload(old_mode, new_mode, bypass_now, electric_level, days_since_last_bypass, low_minsoc, med_minsoc)` — returns `(mqtt_payload_or_None, effective_new_mode)`
+- [x] Test: `→ serve` with `bypass_now` → outputLimit:0, passMode:1, minSoc:low
+- [x] Test: `→ serve` with `level ≥ 30 ∧ days < 7` → outputLimit:0, minSoc:med
+- [x] Test: `→ serve` neither → delay (effective_new_mode == old_mode, payload None)
+- [x] Test: `→ dual` with `level < 20 ∧ days < 7` → delay
+- [x] Test: `→ dual` with `level ≥ 20` → no payload, mode advances
+- [x] Test: `→ charge` always emits charge payload
+- [x] Test: no mode change but `bypass_now` → emits bypass-low-stop payload
+- [x] Test: no mode change and not bypass → None, None
+- [x] Test: `old_mode` in {None, 'unknown', 'unavailable'} → treated as same-as-new_mode (no transition payload)
 
 ### 3b. AppDaemon glue (`ZendureStateMachine.py`)
 - [ ] Add `zendure_state_machine` block to `apps.yaml` per knowledgebase
@@ -74,16 +74,16 @@ Ordered checklist. Implementation only starts after this list is agreed. Compani
 ## Phase 4 — `ZendureSetpoint`
 
 ### 4a. Pure logic (extend `zendure_logic.py`) + tests
-- [ ] Add `derive_bypass_now(outputpackpower, packstate)` — returns bool
-- [ ] Test: `(0, 'idle')` → True; everything else → False
-- [ ] Add `compute_setpoint(power_con, power_sol, mode, solar_input_power, electric_level, batt_low_stop, inverter_max_power, dual_max_power, dual_solar_margin, power_step, target_bias_steps)` — returns int
-- [ ] Test: serve mode, target quantizes to step
-- [ ] Test: half-step bias subtracted (e.g. `bias=0.5, step=30 → target − 15`)
-- [ ] Test: `charge` mode → 0
-- [ ] Test: `dual` mode caps at `min(dual_max_power, (solar − margin) quantized)`
-- [ ] Test: `dual` mode with `solar < margin` → cap is 0 (or negative, then clamped)
-- [ ] Test: `electric_level ≤ batt_low_stop` → 0 (no latch)
-- [ ] Test: clamp `0 ≤ setpoint ≤ cap`
+- [x] Add `derive_bypass_now(outputpackpower, packstate)` — returns bool
+- [x] Test: `(0, 'idle')` → True; everything else → False
+- [x] Add `compute_setpoint(power_con, power_sol, mode, solar_input_power, electric_level, batt_low_stop, inverter_max_power, dual_max_power, dual_solar_margin, power_step, target_bias_steps)` — returns int
+- [x] Test: serve mode, target quantizes to step
+- [x] Test: half-step bias subtracted (e.g. `bias=0.5, step=30 → target − 15`)
+- [x] Test: `charge` mode → 0
+- [x] Test: `dual` mode caps at `min(dual_max_power, (solar − margin) quantized)`
+- [x] Test: `dual` mode with `solar < margin` → cap is 0 (or negative, then clamped)
+- [x] Test: `electric_level ≤ batt_low_stop` → 0 (no latch)
+- [x] Test: clamp `0 ≤ setpoint ≤ cap`
 
 ### 4b. AppDaemon glue (`ZendureSetpoint.py`)
 - [ ] Add `zendure_setpoint` block to `apps.yaml`
