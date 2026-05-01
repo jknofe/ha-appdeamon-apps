@@ -1,0 +1,359 @@
+"""Unit tests for zendure_logic pure functions.
+
+Test names map to TST-N IDs in zendure-requirements.md. Each test docstring
+cites the specific TST-N + REQ ID it covers so coverage is traceable.
+"""
+import pytest
+
+from zendure_logic import (
+    is_bypass_active,
+    pick_operation_mode,
+    pick_mode_payload,
+    derive_bypass_now,
+    compute_setpoint,
+)
+
+
+# Reference 24-slot schedule per SM-4 default:
+# 00..05 serve, 06..07 charge, 08..14 dual, 15..23 serve.
+DEFAULT_SCHEDULE = (
+    ['serve'] * 6
+    + ['charge'] * 2
+    + ['dual'] * 7
+    + ['serve'] * 9
+)
+assert len(DEFAULT_SCHEDULE) == 24  # sanity guard for the test fixture
+
+
+# ============================================================================
+# is_bypass_active (BT-4) — TST-1..6
+# ============================================================================
+
+def test_bypass_all_conditions_met():
+    """TST-1 / BT-4: all four conditions met -> True."""
+    assert is_bypass_active(
+        electric_level=100, packstate='idle',
+        outputpackpower=0, solarinputpower=100, solar_threshold=50,
+    ) is True
+
+
+def test_bypass_level_99_false():
+    """TST-2 / BT-4: electric_level == 99 -> False."""
+    assert is_bypass_active(
+        electric_level=99, packstate='idle',
+        outputpackpower=0, solarinputpower=100, solar_threshold=50,
+    ) is False
+
+
+def test_bypass_packstate_charging_false():
+    """TST-3 / BT-4: packstate == 'charging' -> False."""
+    assert is_bypass_active(
+        electric_level=100, packstate='charging',
+        outputpackpower=0, solarinputpower=100, solar_threshold=50,
+    ) is False
+
+
+def test_bypass_outputpackpower_nonzero_false():
+    """TST-4 / BT-4: outputpackpower == 1 -> False."""
+    assert is_bypass_active(
+        electric_level=100, packstate='idle',
+        outputpackpower=1, solarinputpower=100, solar_threshold=50,
+    ) is False
+
+
+def test_bypass_solar_at_threshold_false():
+    """TST-5 / BT-4: solarinputpower == solar_threshold (strict >) -> False."""
+    assert is_bypass_active(
+        electric_level=100, packstate='idle',
+        outputpackpower=0, solarinputpower=50, solar_threshold=50,
+    ) is False
+
+
+def test_bypass_solar_just_above_threshold_true():
+    """TST-6 / BT-4: solarinputpower == solar_threshold + 1 -> True."""
+    assert is_bypass_active(
+        electric_level=100, packstate='idle',
+        outputpackpower=0, solarinputpower=51, solar_threshold=50,
+    ) is True
+
+
+# ============================================================================
+# pick_operation_mode (SM-4, SM-5) — TST-7..10
+# ============================================================================
+
+def test_pick_mode_serve_morning():
+    """TST-7 / SM-4: hours 0, 5 -> serve."""
+    assert pick_operation_mode(0, DEFAULT_SCHEDULE) == 'serve'
+    assert pick_operation_mode(5, DEFAULT_SCHEDULE) == 'serve'
+
+
+def test_pick_mode_charge_window():
+    """TST-8 / SM-4: hours 6, 7 -> charge."""
+    assert pick_operation_mode(6, DEFAULT_SCHEDULE) == 'charge'
+    assert pick_operation_mode(7, DEFAULT_SCHEDULE) == 'charge'
+
+
+def test_pick_mode_dual_window():
+    """TST-9 / SM-4: hours 8, 14 -> dual."""
+    assert pick_operation_mode(8, DEFAULT_SCHEDULE) == 'dual'
+    assert pick_operation_mode(14, DEFAULT_SCHEDULE) == 'dual'
+
+
+def test_pick_mode_serve_evening():
+    """TST-10 / SM-4: hours 15, 23 -> serve."""
+    assert pick_operation_mode(15, DEFAULT_SCHEDULE) == 'serve'
+    assert pick_operation_mode(23, DEFAULT_SCHEDULE) == 'serve'
+
+
+# ============================================================================
+# pick_mode_payload (SM-7..15) — TST-11..22
+# ============================================================================
+
+LOW = 100   # low_minsoc default per CFG-4 (=10%)
+MED = 200   # med_minsoc default per CFG-4 (=20%)
+
+
+def test_pick_payload_no_change_no_bypass():
+    """TST-11 / SM-15: old=serve, new=serve, no bypass -> (None, serve)."""
+    payload, mode = pick_mode_payload(
+        old_mode='serve', new_mode='serve', bypass_now=False,
+        electric_level=50, days_since_last_bypass=2,
+        low_minsoc=LOW, med_minsoc=MED,
+    )
+    assert payload is None
+    assert mode == 'serve'
+
+
+def test_pick_payload_no_change_with_bypass():
+    """TST-12 / SM-14: no mode change but bypass_now -> bypass-low-stop payload."""
+    payload, mode = pick_mode_payload(
+        old_mode='serve', new_mode='serve', bypass_now=True,
+        electric_level=100, days_since_last_bypass=0,
+        low_minsoc=LOW, med_minsoc=MED,
+    )
+    assert payload == {'properties': {'outputLimit': 0, 'passMode': 0, 'minSoc': LOW}}
+    assert mode == 'serve'
+
+
+def test_pick_payload_to_serve_with_bypass():
+    """TST-13 / SM-8: charge->serve with bypass_now -> outputLimit:0, passMode:1, minSoc:low."""
+    payload, mode = pick_mode_payload(
+        old_mode='charge', new_mode='serve', bypass_now=True,
+        electric_level=100, days_since_last_bypass=0,
+        low_minsoc=LOW, med_minsoc=MED,
+    )
+    assert payload == {'properties': {'outputLimit': 0, 'passMode': 1, 'minSoc': LOW}}
+    assert mode == 'serve'
+
+
+def test_pick_payload_to_serve_30pct_recent_bypass():
+    """TST-14 / SM-9: charge->serve, level>=30 and days<7 -> outputLimit:0, minSoc:med."""
+    payload, mode = pick_mode_payload(
+        old_mode='charge', new_mode='serve', bypass_now=False,
+        electric_level=30, days_since_last_bypass=3,
+        low_minsoc=LOW, med_minsoc=MED,
+    )
+    assert payload == {'properties': {'outputLimit': 0, 'minSoc': MED}}
+    assert mode == 'serve'
+
+
+def test_pick_payload_to_serve_low_level_delays():
+    """TST-15 / SM-10: charge->serve, level<30 (no bypass, days<7) -> delay (None, charge)."""
+    payload, mode = pick_mode_payload(
+        old_mode='charge', new_mode='serve', bypass_now=False,
+        electric_level=29, days_since_last_bypass=3,
+        low_minsoc=LOW, med_minsoc=MED,
+    )
+    assert payload is None
+    assert mode == 'charge'
+
+
+def test_pick_payload_to_serve_old_bypass_delays():
+    """TST-16 / SM-10: charge->serve, level=30 but days>=7 -> delay (None, charge)."""
+    payload, mode = pick_mode_payload(
+        old_mode='charge', new_mode='serve', bypass_now=False,
+        electric_level=30, days_since_last_bypass=7,
+        low_minsoc=LOW, med_minsoc=MED,
+    )
+    assert payload is None
+    assert mode == 'charge'
+
+
+def test_pick_payload_to_dual_low_level_recent_delays():
+    """TST-17 / SM-11: charge->dual, level<20 and days<7 -> delay (None, charge)."""
+    payload, mode = pick_mode_payload(
+        old_mode='charge', new_mode='dual', bypass_now=False,
+        electric_level=19, days_since_last_bypass=3,
+        low_minsoc=LOW, med_minsoc=MED,
+    )
+    assert payload is None
+    assert mode == 'charge'
+
+
+def test_pick_payload_to_dual_healthy_advances():
+    """TST-18 / SM-12: charge->dual, level>=20 -> advance, no payload."""
+    payload, mode = pick_mode_payload(
+        old_mode='charge', new_mode='dual', bypass_now=False,
+        electric_level=20, days_since_last_bypass=3,
+        low_minsoc=LOW, med_minsoc=MED,
+    )
+    assert payload is None
+    assert mode == 'dual'
+
+
+def test_pick_payload_to_dual_old_bypass_advances():
+    """TST-19 / SM-12: charge->dual, level<20 but days>=7 -> advance (delay needs both)."""
+    payload, mode = pick_mode_payload(
+        old_mode='charge', new_mode='dual', bypass_now=False,
+        electric_level=19, days_since_last_bypass=7,
+        low_minsoc=LOW, med_minsoc=MED,
+    )
+    assert payload is None
+    assert mode == 'dual'
+
+
+def test_pick_payload_to_charge_emits_payload():
+    """TST-20 / SM-13: serve->charge always emits charge payload."""
+    payload, mode = pick_mode_payload(
+        old_mode='serve', new_mode='charge', bypass_now=False,
+        electric_level=50, days_since_last_bypass=3,
+        low_minsoc=LOW, med_minsoc=MED,
+    )
+    assert payload == {'properties': {'outputLimit': 0, 'passMode': 0, 'minSoc': LOW}}
+    assert mode == 'charge'
+
+
+def test_pick_payload_unknown_old_mode():
+    """TST-21 / SM-7: old='unknown' -> treated as same-as-new, no transition."""
+    payload, mode = pick_mode_payload(
+        old_mode='unknown', new_mode='charge', bypass_now=False,
+        electric_level=50, days_since_last_bypass=3,
+        low_minsoc=LOW, med_minsoc=MED,
+    )
+    assert payload is None
+    assert mode == 'charge'
+
+
+def test_pick_payload_none_old_mode():
+    """TST-22 / SM-7: old=None -> treated as same-as-new, no transition."""
+    payload, mode = pick_mode_payload(
+        old_mode=None, new_mode='dual', bypass_now=False,
+        electric_level=50, days_since_last_bypass=3,
+        low_minsoc=LOW, med_minsoc=MED,
+    )
+    assert payload is None
+    assert mode == 'dual'
+
+
+# ============================================================================
+# derive_bypass_now (SP-4) — TST-23..26
+# ============================================================================
+
+def test_derive_bypass_now_idle_zero_power():
+    """TST-23 / SP-4: (0, 'idle') -> True."""
+    assert derive_bypass_now(outputpackpower=0, packstate='idle') is True
+
+
+def test_derive_bypass_now_charging():
+    """TST-24 / SP-4: (0, 'charging') -> False."""
+    assert derive_bypass_now(outputpackpower=0, packstate='charging') is False
+
+
+def test_derive_bypass_now_discharging():
+    """TST-25 / SP-4: (0, 'discharging') -> False."""
+    assert derive_bypass_now(outputpackpower=0, packstate='discharging') is False
+
+
+def test_derive_bypass_now_nonzero_power():
+    """TST-26 / SP-4: (50, 'idle') -> False."""
+    assert derive_bypass_now(outputpackpower=50, packstate='idle') is False
+
+
+# ============================================================================
+# compute_setpoint (SP-5..11) — TST-27..36
+# ============================================================================
+
+# Standard "non-blocking" args for serve mode: high SoC, no battery protection,
+# default caps. Used as the base; tests override only what they care about.
+def _serve_args(**overrides):
+    base = dict(
+        power_con=0, power_sol=0, mode='serve', solar_input_power=0,
+        electric_level=50, batt_low_stop=10,
+        inverter_max_power=390, dual_max_power=600, dual_solar_margin=60,
+        power_step=30, target_bias_steps=0.5,
+    )
+    base.update(overrides)
+    return base
+
+
+def test_compute_serve_quantizes_to_step_with_bias():
+    """TST-27 / SP-5,6: serve mode, target=300-15=285, quantizes to 270 (within cap)."""
+    sp = compute_setpoint(**_serve_args(power_con=300))
+    # target = 300 - 0 - (30 * 0.5) = 285; (285 // 30) * 30 = 270
+    assert sp == 270
+
+
+def test_compute_serve_clamps_to_inverter_max():
+    """TST-28 / SP-9,11: large target clamped at inverter_max_power=390."""
+    sp = compute_setpoint(**_serve_args(power_con=1000))
+    # target = 1000 - 15 = 985; quantized = 960; clamped at 390
+    assert sp == 390
+
+
+def test_compute_serve_negative_target_clamps_to_zero():
+    """TST-29 / SP-11: target negative -> 0."""
+    sp = compute_setpoint(**_serve_args(power_con=0, power_sol=0))
+    # target = -15, quantized negative, clamped at 0
+    assert sp == 0
+
+
+def test_compute_charge_mode_forces_zero():
+    """TST-30 / SP-7: charge mode -> 0 regardless of inputs."""
+    sp = compute_setpoint(**_serve_args(mode='charge', power_con=500, power_sol=0))
+    assert sp == 0
+
+
+def test_compute_dual_caps_to_half_solar():
+    """TST-31 / SP-8: dual mode with solar=300, margin=60 -> half_solar=240; caps target."""
+    # power_con=500: target=500-15=485, quantized=480; min(480, 240, 600) = 240
+    sp = compute_setpoint(**_serve_args(mode='dual', power_con=500, solar_input_power=300))
+    assert sp == 240
+    # power_con=200: target=185, quantized=180; min(180, 240, 600) = 180
+    sp = compute_setpoint(**_serve_args(mode='dual', power_con=200, solar_input_power=300))
+    assert sp == 180
+
+
+def test_compute_dual_low_solar_clamps_to_zero():
+    """TST-32 / SP-8,11: dual mode with solar=50, margin=60 -> half_solar negative, setpoint=0."""
+    sp = compute_setpoint(**_serve_args(mode='dual', power_con=500, solar_input_power=50))
+    assert sp == 0
+
+
+def test_compute_dual_caps_at_dual_max_power():
+    """TST-33 / SP-8: dual mode with high target and high solar -> capped at dual_max_power=600."""
+    # power_con=1000, target=985, quantized=960
+    # solar=2000, half_solar=(2000-60)//30*30 = 1940//30*30 = 1920
+    # min(960, 1920, 600) = 600
+    sp = compute_setpoint(**_serve_args(mode='dual', power_con=1000, solar_input_power=2000))
+    assert sp == 600
+
+
+def test_compute_battery_protection_at_low_stop():
+    """TST-34 / SP-10: electric_level == batt_low_stop -> 0 (uses <=)."""
+    sp = compute_setpoint(**_serve_args(power_con=300, electric_level=10, batt_low_stop=10))
+    assert sp == 0
+
+
+def test_compute_battery_protection_above_threshold_unaffected():
+    """TST-35 / SP-10: electric_level > batt_low_stop -> protection does not fire."""
+    sp = compute_setpoint(**_serve_args(power_con=300, electric_level=11, batt_low_stop=10))
+    # Same as TST-27 base case: 270
+    assert sp == 270
+
+
+def test_compute_no_battery_latch():
+    """TST-36 / SP-10: no latch — recovering SoC immediately allows non-zero setpoint."""
+    sp_low = compute_setpoint(**_serve_args(power_con=300, electric_level=10, batt_low_stop=10))
+    assert sp_low == 0
+    sp_high = compute_setpoint(**_serve_args(power_con=300, electric_level=20, batt_low_stop=10))
+    assert sp_high == 270
