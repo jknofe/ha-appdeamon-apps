@@ -16,6 +16,7 @@ Conventions for changes in this repo. Solo dev, direct to `main`, no PRs.
   Tick Phase 2 boxes in zendure-tasks.md
   ```
 - **Body**: usually skip. Add only if the *why* is non-obvious from the diff.
+- **Trailers**: never add `Co-Authored-By:` (or any other AI-attribution trailer) to commits. The user is the sole author. Bare commit message only.
 
 ## Python
 
