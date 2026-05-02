@@ -73,9 +73,16 @@ ha-appdeamon-apps/
 
 ### Why this layout is AppDaemon-correct
 
-- AppDaemon only imports files referenced from `apps.yaml` containing `hass.Hass` subclasses; everything else is invisible to the app loader. So `zendure_logic.py` and `tests/` cause no app-loading interference.
-- The official docs explicitly bless the shared-library-at-top-level pattern: *"Python modules may be imported directly if they are in a directory in which other apps reside."* AppDaemon tracks dependencies via AST so apps reload when shared modules change.
-- AppDaemon auto-ignores any path containing a `.` segment, so `.venv/` is invisible. `tests/` (no dot) is not auto-ignored, but it's also not imported (no entry in `apps.yaml`). If cosmetic warnings ever appear, add `exclude_dirs: [tests]` to `appdaemon.yaml` on the HA host.
+- AppDaemon imports modules referenced from `apps.yaml` plus their AST-tracked dependencies, so `zendure_logic.py` reloads correctly when shared logic changes.
+- The official docs bless the shared-library-at-top-level pattern: *"Python modules may be imported directly if they are in a directory in which other apps reside."*
+- AppDaemon auto-ignores any path containing a `.` segment, so `.venv/` is invisible.
+- **`tests/` requires `exclude_dirs` on the HA host.** The hot-reload watcher tries to import every modified `.py` file under `app_dir`, including ones in subdirectories — when a test file changes it tries `import test_app_helpers`, which fails because pytest's path setup isn't there. The error is non-fatal (apps still restart) but noisy. Required config in `/config/appdaemon.yaml`:
+  ```yaml
+  appdaemon:
+    exclude_dirs:
+      - tests
+  ```
+  This is durable infrastructure config; if the HA host is ever rebuilt, restoring `exclude_dirs` is part of the recovery checklist.
 - A `tests/` *with* leading dot would be hidden from AppDaemon AND from pytest's default `norecursedirs`, so we keep the no-dot name.
 - We do not group Zendure files into a `zendure/` package: it would force `apps.yaml` to use `module: zendure.ZendureSetpoint` and break consistency with the flat `PowerMeter.py`.
 
