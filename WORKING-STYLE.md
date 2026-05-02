@@ -62,11 +62,12 @@ ha-appdeamon-apps/
 ├── ZendureSetpoint.py              # AppDaemon glue
 ├── ZendureStateMachine.py          # AppDaemon glue
 ├── zendure_logic.py                # pure functions, no AppDaemon imports
-├── tests/
+├── tests/                          # pytest, AppDaemon-excluded via exclude_dirs
 │   ├── conftest.py
-│   └── test_zendure_logic.py
+│   └── test_*.py
+├── tools/                          # one-shot scripts (CSV evaluation etc),
+│   └── evaluate_history.py         #   AppDaemon-excluded via exclude_dirs
 ├── .venv/                          # local pytest env (gitignored, AppDaemon-ignored as dotfile)
-├── conftest at tests/conftest.py
 ├── *.md (design docs)
 └── .gitignore
 ```
@@ -76,13 +77,14 @@ ha-appdeamon-apps/
 - AppDaemon imports modules referenced from `apps.yaml` plus their AST-tracked dependencies, so `zendure_logic.py` reloads correctly when shared logic changes.
 - The official docs bless the shared-library-at-top-level pattern: *"Python modules may be imported directly if they are in a directory in which other apps reside."*
 - AppDaemon auto-ignores any path containing a `.` segment, so `.venv/` is invisible.
-- **`tests/` requires `exclude_dirs` on the HA host.** The hot-reload watcher tries to import every modified `.py` file under `app_dir`, including ones in subdirectories — when a test file changes it tries `import test_app_helpers`, which fails because pytest's path setup isn't there. The error is non-fatal (apps still restart) but noisy. Required config in `/config/appdaemon.yaml`:
+- **Non-app subdirectories require `exclude_dirs` on the HA host.** The hot-reload watcher tries to import every modified `.py` file under `app_dir`, including ones in subdirectories. For `tests/` it tries `import test_app_helpers` (fails because pytest path setup isn't there); for `tools/` it would try to import standalone scripts. The error is non-fatal (apps still restart) but noisy. Required config in `/config/appdaemon.yaml`:
   ```yaml
   appdaemon:
     exclude_dirs:
       - tests
+      - tools
   ```
-  This is durable infrastructure config; if the HA host is ever rebuilt, restoring `exclude_dirs` is part of the recovery checklist.
+  This is durable infrastructure config; if the HA host is ever rebuilt, restoring `exclude_dirs` is part of the recovery checklist. Add any new non-app subdirectory here when introduced.
 - A `tests/` *with* leading dot would be hidden from AppDaemon AND from pytest's default `norecursedirs`, so we keep the no-dot name.
 - We do not group Zendure files into a `zendure/` package: it would force `apps.yaml` to use `module: zendure.ZendureSetpoint` and break consistency with the flat `PowerMeter.py`.
 
