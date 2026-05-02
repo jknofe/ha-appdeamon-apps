@@ -21,6 +21,23 @@ def is_bypass_active(electric_level, packstate, outputpackpower, solarinputpower
             and solarinputpower > solar_threshold)
 
 
+def bypass_status(app_active, zendure_active):
+    """Combine our derived bypass predicate with Zendure's reported `pass` flag.
+
+    Returns one of: 'none', 'app_only', 'zendure_only', 'both'. Charting this
+    side-by-side surfaces both the case we're working around (app sees bypass
+    while Zendure stays silent) and any case where Zendure reports bypass but
+    our predicate disagrees (would warrant a predicate review).
+    """
+    if app_active and zendure_active:
+        return "both"
+    if app_active:
+        return "app_only"
+    if zendure_active:
+        return "zendure_only"
+    return "none"
+
+
 def pick_operation_mode(hour, schedule):
     """Hour-based mode lookup. See SM-4, SM-5."""
     return schedule[hour]

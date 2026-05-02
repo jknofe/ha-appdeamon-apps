@@ -14,7 +14,7 @@ import json
 import appdaemon.plugins.hass.hassapi as hass
 
 from app_helpers import next_aligned_minute, parse_interval
-from zendure_logic import is_bypass_active, pick_mode_payload, pick_operation_mode
+from zendure_logic import bypass_status, is_bypass_active, pick_mode_payload, pick_operation_mode
 
 
 class ZendureStateMachine(hass.Hass):
@@ -25,6 +25,7 @@ class ZendureStateMachine(hass.Hass):
         "sensor.zendure_mqtt_outputpackpower",
         "sensor.zendure_mqtt_solarinputpower",
     )
+    BYPASS_ZENDURE_REPORTED_SENSOR = "sensor.zendure_mqtt_bypass"
 
     def initialize(self):
         # Config from apps.yaml (see knowledgebase / requirements §7)
@@ -44,6 +45,14 @@ class ZendureStateMachine(hass.Hass):
         self._bootstrap_bypass_timestamp()
         for entity in self.BYPASS_INPUT_SENSORS:
             self.listen_state(self._on_bypass_input_change, entity)
+
+        # Bypass status sensor (BT-7): exposes app-derived vs Zendure-reported
+        # bypass agreement as a chartable 4-state string.
+        self._last_bypass_status = None
+        self.listen_state(
+            self._on_zendure_bypass_change, self.BYPASS_ZENDURE_REPORTED_SENSOR
+        )
+        self._update_bypass_status_sensor()
 
         # Periodic tick (SM-1, SM-2). Anchor the schedule to clock-aligned
         # minute boundaries (e.g. :00/:20/:40 for a 20 min interval) so ticks
@@ -106,6 +115,30 @@ class ZendureStateMachine(hass.Hass):
         elif self._bypass_pending_handle is not None:
             self.cancel_timer(self._bypass_pending_handle)
             self._bypass_pending_handle = None
+        self._update_bypass_status_sensor()
+
+    def _on_zendure_bypass_change(self, entity, attribute, old, new, kwargs):
+        """BT-7: refresh the status sensor whenever Zendure's reported flag flips."""
+        self._update_bypass_status_sensor()
+
+    def _update_bypass_status_sensor(self):
+        """BT-7: write sensor.zendure_bypass_active only when the 4-state string changes."""
+        app_active = self._evaluate_bypass_predicate()
+        zendure_state = self.get_state(self.BYPASS_ZENDURE_REPORTED_SENSOR)
+        zendure_active = zendure_state == "True"
+        status = bypass_status(app_active, zendure_active)
+        if status == self._last_bypass_status:
+            return
+        self._last_bypass_status = status
+        self.set_state(
+            "sensor.zendure_bypass_active",
+            state=status,
+            attributes={
+                "friendly_name": "Zendure Bypass Active",
+                "app_active": app_active,
+                "zendure_active": zendure_active,
+            },
+        )
 
     def _evaluate_bypass_predicate(self):
         return is_bypass_active(

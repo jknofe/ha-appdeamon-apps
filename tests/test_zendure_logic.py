@@ -6,6 +6,7 @@ cites the specific TST-N + REQ ID it covers so coverage is traceable.
 import pytest
 
 from zendure_logic import (
+    bypass_status,
     is_bypass_active,
     pick_operation_mode,
     pick_mode_payload,
@@ -75,6 +76,32 @@ def test_bypass_solar_just_above_threshold_true():
         electric_level=100, packstate='idle',
         outputpackpower=0, solarinputpower=51, solar_threshold=50,
     ) is True
+
+
+# ============================================================================
+# bypass_status (BT-7) — TST-37..40
+# ============================================================================
+
+def test_bypass_status_none():
+    """TST-37 / BT-7: neither active -> 'none'."""
+    assert bypass_status(False, False) == "none"
+
+
+def test_bypass_status_app_only():
+    """TST-38 / BT-7: app says yes, Zendure silent -> 'app_only' (the case we
+    work around when Zendure stops reporting `pass`)."""
+    assert bypass_status(True, False) == "app_only"
+
+
+def test_bypass_status_zendure_only():
+    """TST-39 / BT-7: Zendure reports yes, our predicate disagrees ->
+    'zendure_only' (would warrant a predicate review if seen often)."""
+    assert bypass_status(False, True) == "zendure_only"
+
+
+def test_bypass_status_both():
+    """TST-40 / BT-7: both agree -> 'both'."""
+    assert bypass_status(True, True) == "both"
 
 
 # ============================================================================

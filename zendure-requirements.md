@@ -127,6 +127,14 @@ Out of scope: the decoder/battery-state stubs, the existing `power_*.py` scripts
   - If False and timer pending → `self.cancel_timer(self._pending_bypass_handle)`, clear handle.
 - **BT-6** `_confirm_bypass`: re-evaluate predicate against current values. If still True → set `self._last_bypass_at = self.datetime()` AND `set_state("sensor.zendure_bypass_reached_at", state=<iso>, attributes={...})`. Clear handle.
 
+### Diagnostic status sensor
+- **BT-7** Maintain `sensor.zendure_bypass_active` whose state combines our derived predicate with Zendure's reported `properties.pass` flag (`sensor.zendure_mqtt_bypass`). Computed by pure function `bypass_status(app_active, zendure_active)`; possible states:
+  - `none` — neither true.
+  - `app_only` — our derivation true, Zendure silent (the case we work around).
+  - `zendure_only` — Zendure true, our predicate disagrees (warrants predicate review).
+  - `both` — agreement.
+  Updated on every change of the four predicate inputs OR `sensor.zendure_mqtt_bypass`, and once on `initialize()`. Written to HA only when the state string actually flips, so history stays clean. Attributes carry the raw `app_active` / `zendure_active` booleans for debugging. Not gated by `dry_run` — same convention as `sensor.zendure_bypass_reached_at`.
+
 ## 7. Configuration requirements
 
 ### `apps.yaml` (per knowledgebase block)
@@ -176,6 +184,12 @@ Each test references the requirement ID it covers in its name (e.g. `test_sp5_po
 - **TST-4** `outputpackpower == 1` → False
 - **TST-5** `solarinputpower == solar_threshold_w` (boundary, strict `>`) → False
 - **TST-6** `solarinputpower == solar_threshold_w + 1` → True
+
+#### `bypass_status` (BT-7)
+- **TST-37** `(False, False)` → `'none'`
+- **TST-38** `(True, False)` → `'app_only'`
+- **TST-39** `(False, True)` → `'zendure_only'`
+- **TST-40** `(True, True)` → `'both'`
 
 #### `pick_operation_mode` (SM-4, SM-5)
 - **TST-7** Hours 0, 5 → `serve`
