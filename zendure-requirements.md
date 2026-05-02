@@ -44,7 +44,7 @@ Out of scope: the decoder/battery-state stubs, the existing `power_*.py` scripts
 
 ### Cadence and lifecycle
 - **SP-1** Runs every `update_interval`, default `"20s"` (parsed by `app_helpers.parse_interval`).
-- **SP-2** First run starts immediately on `initialize()` (matching `PowerMeter.py`).
+- **SP-2** First run is kicked off ~1 s after `initialize()` via `run_in`, so the shadow sensor populates without waiting a full cycle. The periodic `run_every` schedule fires from there.
 
 ### Inputs
 - **SP-3** Reads (in this order, each tolerant of missing/unavailable):
@@ -78,7 +78,7 @@ Out of scope: the decoder/battery-state stubs, the existing `power_*.py` scripts
 
 ### Cadence and lifecycle
 - **SM-1** Runs every `update_interval`, default `"20min"` (parsed by `app_helpers.parse_interval`).
-- **SM-2** Runs once on `initialize()` after the bypass tracker is set up.
+- **SM-2** First tick is kicked off ~1 s after `initialize()` via `run_in` (after the bypass tracker is set up), so `sensor.zendure_operation_mode_shadow` populates on cold start without waiting a full 20 min cycle.
 
 ### Inputs
 - **SM-3** Reads (each tolerant of missing/unavailable):

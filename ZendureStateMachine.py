@@ -45,7 +45,11 @@ class ZendureStateMachine(hass.Hass):
         for entity in self.BYPASS_INPUT_SENSORS:
             self.listen_state(self._on_bypass_input_change, entity)
 
-        # Periodic tick (SM-1, SM-2)
+        # Periodic tick (SM-1, SM-2). AppDaemon's run_every(..., "now", interval)
+        # actually fires the first tick at start + interval, which would mean a
+        # 20 min wait to populate sensor.zendure_operation_mode_shadow on cold
+        # start. Kick off a one-shot tick 1 s after init.
+        self.run_in(self._tick, 1)
         self.run_every(self._tick, "now", self.update_interval)
         self.log("ZendureStateMachine started")
 
