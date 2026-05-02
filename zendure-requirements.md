@@ -78,7 +78,7 @@ Out of scope: the decoder/battery-state stubs, the existing `power_*.py` scripts
 
 ### Cadence and lifecycle
 - **SM-1** Runs every `update_interval`, default `"20min"` (parsed by `app_helpers.parse_interval`).
-- **SM-2** First tick is kicked off ~1 s after `initialize()` via `run_in` (after the bypass tracker is set up), so `sensor.zendure_operation_mode_shadow` populates on cold start without waiting a full 20 min cycle.
+- **SM-2** First tick is kicked off ~1 s after `initialize()` via `run_in` (after the bypass tracker is set up), so `sensor.zendure_operation_mode_shadow` populates on cold start without waiting a full 20 min cycle. The periodic schedule itself is anchored to clock-aligned minute boundaries via `app_helpers.next_aligned_minute` (e.g. `:00`, `:20`, `:40` for a 20 min interval), matching the legacy HA cron cadence so shadow / live ticks land at the same wall-clock times.
 
 ### Inputs
 - **SM-3** Reads (each tolerant of missing/unavailable):

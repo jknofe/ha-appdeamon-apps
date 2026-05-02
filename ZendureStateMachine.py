@@ -13,7 +13,7 @@ import json
 
 import appdaemon.plugins.hass.hassapi as hass
 
-from app_helpers import parse_interval
+from app_helpers import next_aligned_minute, parse_interval
 from zendure_logic import is_bypass_active, pick_mode_payload, pick_operation_mode
 
 
@@ -45,13 +45,19 @@ class ZendureStateMachine(hass.Hass):
         for entity in self.BYPASS_INPUT_SENSORS:
             self.listen_state(self._on_bypass_input_change, entity)
 
-        # Periodic tick (SM-1, SM-2). AppDaemon's run_every(..., "now", interval)
-        # actually fires the first tick at start + interval, which would mean a
-        # 20 min wait to populate sensor.zendure_operation_mode_shadow on cold
-        # start. Kick off a one-shot tick 1 s after init.
+        # Periodic tick (SM-1, SM-2). Anchor the schedule to clock-aligned
+        # minute boundaries (e.g. :00/:20/:40 for a 20 min interval) so ticks
+        # happen at predictable wall-clock times across restarts, matching the
+        # legacy HA cron schedule. The run_in kickoff still fires once shortly
+        # after init so the shadow sensor populates without waiting up to a
+        # full interval for the first aligned boundary.
+        interval_min = self.update_interval // 60
+        next_start = next_aligned_minute(self.datetime(), interval_min)
         self.run_in(self._tick, 1)
-        self.run_every(self._tick, "now", self.update_interval)
-        self.log("ZendureStateMachine started")
+        self.run_every(self._tick, next_start, self.update_interval)
+        self.log(
+            f"ZendureStateMachine started; aligned schedule starts at {next_start.isoformat()}"
+        )
 
     # ------------------------------------------------------------------
     # Bypass tracker (BT-1..6)
