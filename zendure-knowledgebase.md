@@ -39,7 +39,7 @@ Out of scope:
 | Q3 | **MQTT subscribe / decoding stays in HA YAML**. AppDaemon reads `sensor.zendure_mqtt_*` states. | Lowest risk. |
 | Q4 | **Persistent flags stay as HA entities** where still used. The new live scripts have stripped most of them. | Visible on dashboards, restored after HA restart. |
 | Q5 | **Hybrid config**: device-identity in `apps.yaml`, two HA helpers (`input_boolean.zendure_dry_run`, `input_number.zendure_inverter_max_power`) for live tuning. Other constants stay in `apps.yaml`. | No restart for tuning; minimal helper sprawl. |
-| Q6 | **Shadow mode for the whole prototyping phase**. No MQTT publish to Zendure, no overwrite of live `sensor.zendure_setpoint` / `zendure.operation_mode`. Writes parallel `*_shadow` sensors. Cutover via `input_boolean.zendure_dry_run`. | Inverter is driven every 20 s; bug = wrong power flow. |
+| Q6 | **Shadow mode for the whole prototyping phase**. Live `sensor.zendure_setpoint` / `zendure.operation_mode` are not overwritten — writes go to parallel `*_shadow` sensors. MQTT publishes are redirected to `shadow/<original-topic>` with the exact payload the Zendure system would receive, so an external subscriber can diff them against the legacy `python_script` writes on the real topic. Cutover via `input_boolean.zendure_dry_run`. | Inverter is driven every 20 s; bug = wrong power flow. |
 | Q7 | **Bypass tracker lives inside `ZendureStateMachine`**, uses `listen_state` + 60 s debounce on the conjunction `electriclevel==100 ∧ packstate=='idle' ∧ outputpackpower==0 ∧ solarinputpower>50`. Persists to `sensor.zendure_bypass_reached_at`. | Replaces the unreliable `sensor.zendure_mqtt_bypass` and the dumb HA automation; keeps app count at two. |
 
 ## MQTT topics

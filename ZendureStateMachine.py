@@ -211,9 +211,11 @@ class ZendureStateMachine(hass.Hass):
 
     def _publish_mqtt(self, topic, payload):
         payload_str = json.dumps(payload)
+        # In dry_run, redirect to a shadow-prefixed topic with the same payload
+        # so an external subscriber can diff our proposed writes against the
+        # live python_script's writes on the real topic.
         if self._dry_run():
-            self.log(f"[dry_run] would publish topic={topic} payload={payload_str}")
-            return
+            topic = f"shadow/{topic}"
         try:
             self.call_service(
                 "mqtt/publish", topic=topic, payload=payload_str

@@ -26,13 +26,13 @@ Out of scope: the decoder/battery-state stubs, the existing `power_*.py` scripts
 | `power_target_bias_steps` | Steps subtracted from raw power target, fixed 0.5 |
 | `bypass_now` | Instantaneous bypass guess inside `ZendureSetpoint` (`outputpackpower==0 ∧ packstate=='idle'`) |
 | `bypass_reached` | Sustained bypass condition recorded by the tracker |
-| `dry_run` | Boolean from `input_boolean.zendure_dry_run`, gates all MQTT writes |
+| `dry_run` | Boolean from `input_boolean.zendure_dry_run`, redirects MQTT publishes to `shadow/<topic>` and HA writes to shadow sensors |
 
 ## 3. Cross-cutting requirements
 
 - **CC-1** Both apps subclass `appdaemon.plugins.hass.hassapi.Hass`, follow the style of `PowerMeter.py`.
 - **CC-2** All MQTT publishes go through `self.call_service("mqtt/publish", topic=..., payload=...)`. No native broker connection.
-- **CC-3** Every MQTT publish is gated on `dry_run == off`. If `dry_run == on`, the payload is computed and logged at INFO but not published.
+- **CC-3** Every MQTT publish is gated on `dry_run`. With `dry_run == off`, the payload is published to the configured topic. With `dry_run == on`, the same payload is published to a shadow-prefixed topic (`shadow/<original-topic>`) so an external subscriber can diff our proposed publishes against the live `python_script` writes on the real topic. The live (non-shadow) topic is never written while `dry_run == on`.
 - **CC-4** `initialize()` is idempotent and cheap (no blocking I/O ≥ 100 ms, no side effects we wouldn't want repeated on AppDaemon hot-reload).
 - **CC-5** Periodic callbacks guard against in-flight reentry with a per-app `self._is_running` flag, mirroring `PowerMeter.py:33`.
 - **CC-6** All HA entity reads tolerate `None`, `'unknown'`, `'unavailable'` by returning a documented default (typically `0` for numeric, `''` for string), never raising.
@@ -156,7 +156,7 @@ Out of scope: the decoder/battery-state stubs, the existing `power_*.py` scripts
 ## 10. Logging requirements
 
 - **LOG-1** Match `PowerMeter.py` logging discipline: terse, mostly silent on the happy path.
-- **LOG-2** Log at INFO on: AppDaemon load (`<App> started`), mode transition (`Zendure mode <old> → <new>, payload=<...>`), bypass-reached event (`Bypass reached at <iso>`), dry-run skipped publish (`[dry_run] would publish <topic> <payload>`).
+- **LOG-2** Log at INFO on: AppDaemon load (`<App> started`), mode transition (`Zendure mode <old> → <new>, payload=<...>`), bypass-reached event (`Bypass reached at <iso>`). Shadow-mode publishes are not logged per-tick — they are observable by subscribing to `shadow/#`.
 - **LOG-3** Log at WARNING on: input parse fallbacks (`<entity> unparseable, using default <x>`), bypass-tracker bootstrap fallback.
 - **LOG-4** Log at ERROR on: caught exceptions, MQTT publish failures.
 - **LOG-5** Do not log every periodic tick. Setpoint app especially must stay quiet at 20 s cadence.
@@ -219,7 +219,7 @@ Each test references the requirement ID it covers in its name (e.g. `test_sp5_po
 
 - **TST-INT-1** Both apps load on AppDaemon without errors after `git pull`.
 - **TST-INT-2** With `dry_run = on`, `sensor.zendure_setpoint_shadow` and `sensor.zendure_operation_mode_shadow` populate within one cycle each.
-- **TST-INT-3** No MQTT messages with topic `iot/73bkTV/SE7546CU/properties/write` are observed (use HA MQTT integration debug or `mosquitto_sub`) while `dry_run = on`.
+- **TST-INT-3** While `dry_run = on`: no MQTT messages on the live topics (`iot/73bkTV/SE7546CU/properties/{write,read}`) come from AppDaemon — only the legacy `python_script` writes appear there. The same payloads our apps would publish appear on `shadow/iot/73bkTV/SE7546CU/properties/{write,read}` (verified via HA MQTT integration debug or `mosquitto_sub -t 'shadow/#'`).
 - **TST-INT-4** Over a ≥ 24 h window covering all 4 schedule transitions (serve↔charge, charge↔dual, dual↔serve), shadow values match live values within ±`power_step` for setpoint and identically for mode.
 - **TST-INT-5** A real bypass moment (battery 100 % under sun) triggers `sensor.zendure_bypass_reached_at` to update within `debounce_seconds + tolerance`.
 - **TST-INT-6** Toggling `dry_run` to `off` immediately allows the next computed change to publish MQTT (verified by topic observation). Toggling back to `on` immediately suppresses.
@@ -230,5 +230,5 @@ Each test references the requirement ID it covers in its name (e.g. `test_sp5_po
 - **AC-2** All Layer 2 integration tests pass on the HA host.
 - **AC-3** With `dry_run = off`, AppDaemon is the sole writer of `sensor.zendure_setpoint` and `zendure.operation_mode`; the corresponding `python_script.*` automations are disabled or removed.
 - **AC-4** `sensor.zendure_bypass_reached_at` updates correctly across at least one observed real-world bypass event.
-- **AC-5** Re-enabling `input_boolean.zendure_dry_run` cleanly stops MQTT publishes within one tick (panic switch verified).
+- **AC-5** Re-enabling `input_boolean.zendure_dry_run` cleanly redirects MQTT publishes from the live topics to `shadow/<topic>` within one tick (panic switch verified — no further writes hit the live topic until the helper is toggled off again).
 - **AC-6** AppDaemon log is quiet on the happy path (no recurring per-tick messages from the new apps).

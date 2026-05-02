@@ -113,12 +113,13 @@ class ZendureSetpoint(hass.Hass):
     def _publish_setpoint_mqtt(self, setpoint):
         payload = {"properties": {"outputLimit": setpoint}}
         payload_str = json.dumps(payload)
-        if self._dry_run():
-            self.log(f"[dry_run] would publish topic={self.mqtt_topic_write} payload={payload_str}")
-            return
+        # In dry_run, redirect to a shadow-prefixed topic with the same payload
+        # so an external subscriber can diff our proposed setpoints against the
+        # live python_script's writes on the real topic.
+        topic = f"shadow/{self.mqtt_topic_write}" if self._dry_run() else self.mqtt_topic_write
         try:
             self.call_service(
-                "mqtt/publish", topic=self.mqtt_topic_write, payload=payload_str
+                "mqtt/publish", topic=topic, payload=payload_str
             )
         except Exception as e:
             self.log(f"MQTT publish failed: {e}", level="ERROR")
