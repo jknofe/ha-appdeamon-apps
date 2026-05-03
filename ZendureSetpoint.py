@@ -51,11 +51,11 @@ class ZendureSetpoint(hass.Hass):
         # cold-start forces a publish on the first computed setpoint.
         self._setpoint_old = self._get_state_int("sensor.zendure_setpoint", default=None)
 
-        # AppDaemon's run_every(..., "now", interval) actually fires the first
-        # tick at start + interval, not immediately. Kick off a one-shot tick
-        # 1 s after init so the shadow sensor populates without waiting a full
-        # cycle. The _is_running guard prevents overlap with the periodic run.
-        self.run_in(self._tick, 1)
+        # First tick fires at start + update_interval (20 s by default). No
+        # kickoff: 20 s is short enough not to matter, and letting the state
+        # machine's own kickoff write zendure.operation_mode first means our
+        # first setpoint tick reads a fresh mode rather than a cold-start
+        # 'serve' default.
         self.run_every(self._tick, "now", self.update_interval)
         self.log("ZendureSetpoint started")
 

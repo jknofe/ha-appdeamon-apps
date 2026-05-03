@@ -55,7 +55,7 @@ Out of scope: decoder/battery-state stubs, the legacy `power_*.py` (covered by
 
 ### Cadence and lifecycle
 - **SP-1** Runs every `update_interval`, default `"20s"` (parsed by `app_helpers.parse_interval`).
-- **SP-2** First tick is fired ~1 s after `initialize()` via `run_in` so the shadow sensor populates on cold start without waiting a full cycle. Periodic `run_every` schedule kicks in from there.
+- **SP-2** First tick fires at `start + update_interval` (= ~20 s after `initialize()`). No `run_in` kickoff — 20 s is short enough that the delay is invisible, and waiting also lets the state machine's own kickoff write `zendure.operation_mode` first so the setpoint's first read sees a fresh mode rather than the cold-start fallback.
 
 ### Inputs
 - **SP-3** Reads (each tolerant of missing/unavailable):
