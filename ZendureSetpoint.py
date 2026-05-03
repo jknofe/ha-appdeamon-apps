@@ -8,12 +8,13 @@ glue: read HA state, call the pure function, write HA state, publish MQTT.
 
 See zendure-requirements.md section 4 for the contract.
 """
+import datetime
 import json
 
 import appdaemon.plugins.hass.hassapi as hass
 
 from app_helpers import parse_interval
-from zendure_logic import compute_setpoint
+from zendure_logic import compute_setpoint, derive_bypass_now
 
 
 class ZendureSetpoint(hass.Hass):
@@ -30,6 +31,11 @@ class ZendureSetpoint(hass.Hass):
         self.power_step = self.args.get("power_step", 30)
         self.batt_low_stop = self.args.get("batt_low_stop", 10)
         self.power_target_bias_steps = self.args.get("power_target_bias_steps", 0.5)
+        # SP-15: hours-since-last-bypass override window for dual-limit. Within
+        # this many hours after a confirmed bypass moment, dual-limit's solar
+        # cap is lifted to dual_max_power (the freshly-charged battery is
+        # safe to drain).
+        self.bypass_grace_hours = self.args.get("bypass_grace_hours", 4)
 
         self._is_running = False
 
@@ -63,6 +69,10 @@ class ZendureSetpoint(hass.Hass):
             power_sol = self._get_state_int("sensor.hm_400_power")
             solar_input_power = self._get_state_int("sensor.zendure_mqtt_solarinputpower")
             electric_level = self._get_state_int("sensor.zendure_mqtt_electriclevel")
+            outputpackpower = self._get_state_int("sensor.zendure_mqtt_outputpackpower")
+            packstate = self.get_state("sensor.zendure_mqtt_packstate") or ""
+            bypass_now = derive_bypass_now(outputpackpower, packstate)
+            hours_since_last_bypass = self._hours_since_last_bypass()
 
             # Hybrid config: helper overrides apps.yaml default if set (CFG-7).
             inverter_max_power = int(self._helper_or_default(
@@ -83,6 +93,9 @@ class ZendureSetpoint(hass.Hass):
                 dual_solar_margin=self.dual_solar_margin,
                 power_step=self.power_step,
                 target_bias_steps=self.power_target_bias_steps,
+                bypass_now=bypass_now,
+                hours_since_last_bypass=hours_since_last_bypass,
+                bypass_grace_hours=self.bypass_grace_hours,
             )
 
             self._write_setpoint(setpoint)
@@ -142,6 +155,28 @@ class ZendureSetpoint(hass.Hass):
             return int(float(val))
         except (ValueError, TypeError):
             return default
+
+    def _hours_since_last_bypass(self):
+        """Hours since the last confirmed bypass, read from sensor.zendure_bypass_reached_at.
+
+        That sensor is written by ZendureStateMachine (live timestamp on real
+        bypass, fallback ~7 days ago on cold start). On any read error we
+        return a safely-large value so the bypass-grace override doesn't fire
+        accidentally.
+        """
+        raw = self.get_state("sensor.zendure_bypass_reached_at")
+        if raw in (None, "unknown", "unavailable"):
+            return 999.0
+        try:
+            last = datetime.datetime.fromisoformat(raw)
+        except (ValueError, TypeError):
+            return 999.0
+        now = self.datetime()
+        # AppDaemon's self.datetime() may be naive depending on host config;
+        # match the saved timestamp's awareness so the subtraction works.
+        if (last.tzinfo is None) != (now.tzinfo is None):
+            last = last.replace(tzinfo=now.tzinfo)
+        return (now - last).total_seconds() / 3600.0
 
     def _helper_or_default(self, helper_id, yaml_key, default):
         """Read a HA input_number helper; fall back to apps.yaml then literal."""

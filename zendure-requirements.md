@@ -69,6 +69,8 @@ Out of scope: the decoder/battery-state stubs, the existing `power_*.py` scripts
 - **SP-9** Other modes use cap = `inverter_max_power` (helper-overridable).
 - **SP-10** Battery protection: `electriclevel ≤ batt_low_stop` → setpoint = 0. No latch, no hysteresis.
 - **SP-11** Final clamp: `0 ≤ setpoint ≤ cap`.
+- **SP-14** `mode == 'dual-limit'` applies cap = `(solarinputpower // power_step) * power_step` (quantized solar input, no margin), then `setpoint = min(quantized_target, cap)`. If solar is 0 / negative, cap = 0 → setpoint = 0. Net: output exactly tracks solar production; battery never drains. Used in the SoC band between `mode_pick_low_stop_pct` and `dual_limit_threshold_pct` to keep topping up on bad-weather days.
+- **SP-15** Bypass-grace cap override (applies in `dual-limit` only): if `bypass_now == True` OR `hours_since_last_bypass < bypass_grace_hours` (default 4), the cap is lifted to `dual_max_power`. Rationale: a freshly-charged battery is safe to drain freely; otherwise dual-limit would hoard the just-acquired charge.
 
 ### Outputs
 - **SP-12** Setpoint is written to `sensor.zendure_setpoint` (live) or `sensor.zendure_setpoint_shadow` (shadow), state formatted as `repr(round(setpoint, 0))` to match the original script byte-for-byte. Attributes: `state_class: measurement`, `unit_of_measurement: W`, `device_class: power`, `friendly_name: 'Zendure Setpoint' / 'Zendure Setpoint (shadow)'`.
@@ -86,9 +88,15 @@ Out of scope: the decoder/battery-state stubs, the existing `power_*.py` scripts
   - `zendure.operation_mode` (current mode; `unknown`/`unavailable`/`None` treated per CC-6)
   - `sensor.zendure_bypass_reached_at` (own output, read for `days_since_last_bypass` calc)
 
-### Schedule (pure function `pick_operation_mode`)
-- **SM-4** 24-slot list from `apps.yaml`. Default: hours 0–5 → `serve`, 6–7 → `charge`, 8–14 → `dual`, 15–23 → `serve`.
-- **SM-5** `new_mode = schedule[now.hour]` — pure lookup, no SoC dependency.
+### Schedule (pure functions `pick_operation_mode`, `refine_active_mode`)
+- **SM-4** Static 24-slot list from `apps.yaml`. Default: hours 0–5 → `serve`, 6–14 → `dual` (battery-active window), 15–23 → `serve`.
+- **SM-5** `scheduled_mode = schedule[now.hour]` — pure lookup, no SoC dependency.
+- **SM-18** Runtime refinement of the static schedule: `new_mode = refine_active_mode(scheduled_mode, electric_level, old_mode, mode_pick_low_stop_pct, dual_limit_threshold_pct)`. For non-`dual` slots returns input unchanged. For `dual` slots:
+  - `level <= mode_pick_low_stop_pct` (default 20 %) → `'charge'`.
+  - `level < dual_limit_threshold_pct` (default 30 %) AND `old_mode != 'dual'` → `'dual-limit'`.
+  - Otherwise → `'dual'`.
+
+  The `old_mode != 'dual'` anti-bounce stops a transient mid-day SoC dip from yanking us back to `dual-limit` once we've committed to draining. Matches the live `python_script.zendure_state_machine` for-loop refinement.
 
 ### Mode-change protocol
 - **SM-6** If `new_mode != old_mode` AND `old_mode` is a known mode (not `None`/`unknown`/`unavailable`):
@@ -105,6 +113,7 @@ Out of scope: the decoder/battery-state stubs, the existing `power_*.py` scripts
 - **SM-13** `→ charge` → `{"properties": {"outputLimit": 0, "passMode": 0, "minSoc": low_minsoc}}`, mode advances.
 - **SM-14** No mode change but `bypass_now` (current mode) → `{"properties": {"outputLimit": 0, "passMode": 0, "minSoc": low_minsoc}}`.
 - **SM-15** No mode change and not `bypass_now` → no payload.
+- **SM-19** `→ dual-limit` (any prior mode): no payload, mode advances. `refine_active_mode` already validated SoC against `mode_pick_low_stop_pct`, and the setpoint loop applies the cap (SP-14). No transition guard at the state-machine layer.
 
 ### Outputs
 - **SM-16** Effective mode written to `zendure.operation_mode` (live) or `sensor.zendure_operation_mode_shadow` (shadow). Shadow value is the same raw mode string for chart comparison.
@@ -190,6 +199,26 @@ Each test references the requirement ID it covers in its name (e.g. `test_sp5_po
 - **TST-38** `(True, False)` → `'app_only'`
 - **TST-39** `(False, True)` → `'zendure_only'`
 - **TST-40** `(True, True)` → `'both'`
+
+#### `refine_active_mode` (SM-18)
+- **TST-41** scheduled `'serve'` → unchanged
+- **TST-42** scheduled `'charge'` → unchanged
+- **TST-43** scheduled `'dual'`, level ≤ low_stop_pct → `'charge'` (boundary `==` and `<`)
+- **TST-44** scheduled `'dual'`, low_stop < level < threshold, old != `'dual'` → `'dual-limit'`
+- **TST-45** scheduled `'dual'`, low_stop < level < threshold, old == `'dual'` → `'dual'` (anti-bounce)
+- **TST-46** scheduled `'dual'`, level ≥ threshold → `'dual'`
+- **TST-47** scheduled `'dual'`, level == threshold → `'dual'` (strict `<` to threshold)
+
+#### `compute_setpoint` dual-limit (SP-14, SP-15)
+- **TST-48** dual-limit caps at `(solar_input // step) * step`
+- **TST-49** dual-limit, target < solar_cap → target wins
+- **TST-50** dual-limit, solar_input == 0 → setpoint = 0
+- **TST-51** dual-limit + `bypass_now` → cap lifts to `dual_max_power`
+- **TST-52** dual-limit + `hours_since_last_bypass < bypass_grace_hours` → cap lifts; boundary `==` does not lift (strict `<`)
+
+#### `pick_mode_payload` dual-limit (SM-19)
+- **TST-53** any → dual-limit → `(None, 'dual-limit')`
+- **TST-54** dual-limit → dual-limit, no bypass → `(None, 'dual-limit')`
 
 #### `pick_operation_mode` (SM-4, SM-5)
 - **TST-7** Hours 0, 5 → `serve`

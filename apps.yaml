@@ -12,13 +12,17 @@ zendure_state_machine:
   update_interval: "20min"
   mqtt_topic_write: "iot/73bkTV/SE7546CU/properties/write"
   mqtt_topic_read:  "iot/73bkTV/SE7546CU/properties/read"
+  # 'dual' slots are battery-active hours; the state machine refines each to
+  # charge / dual-limit / dual at runtime based on SoC (SM-18). The legacy
+  # python_script makes the same decision dynamically over the same window.
   schedule:
     [serve, serve, serve, serve, serve, serve,
-     charge, charge,
-     dual, dual, dual, dual, dual, dual, dual,
+     dual, dual, dual, dual, dual, dual, dual, dual, dual,
      serve, serve, serve, serve, serve, serve, serve, serve, serve]
-  low_batt_minsoc: 100      # 10 % * 10
-  med_batt_minsoc: 200      # 20 % * 10
+  low_batt_minsoc: 100             # 10 % * 10 (Zendure minSoc value, *10)
+  med_batt_minsoc: 200             # 20 % * 10
+  mode_pick_low_stop_pct: 20       # SoC <= this -> 'charge' during dual hours
+  dual_limit_threshold_pct: 30     # SoC < this AND not from 'dual' -> 'dual-limit'
   bypass_tracker:
     debounce_seconds: 60
     solar_threshold_w: 50
@@ -34,3 +38,4 @@ zendure_setpoint:
   power_step: 30
   batt_low_stop: 10               # %
   power_target_bias_steps: 0.5    # subtract this many steps from raw target
+  bypass_grace_hours: 4           # within this many hours of last bypass, dual-limit cap lifts to dual_mode_max_power

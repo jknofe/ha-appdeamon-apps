@@ -12,6 +12,7 @@ from zendure_logic import (
     pick_mode_payload,
     derive_bypass_now,
     compute_setpoint,
+    refine_active_mode,
 )
 
 
@@ -384,3 +385,124 @@ def test_compute_no_battery_latch():
     assert sp_low == 0
     sp_high = compute_setpoint(**_serve_args(power_con=300, electric_level=20, batt_low_stop=10))
     assert sp_high == 270
+
+
+# ============================================================================
+# refine_active_mode (SM-18) — TST-41..47
+# ============================================================================
+
+def test_refine_passes_through_serve():
+    """TST-41 / SM-18: scheduled 'serve' is never refined."""
+    assert refine_active_mode('serve', 50, 'serve', 20, 30) == 'serve'
+
+
+def test_refine_passes_through_charge():
+    """TST-42 / SM-18: scheduled 'charge' is never refined."""
+    assert refine_active_mode('charge', 50, 'charge', 20, 30) == 'charge'
+
+
+def test_refine_dual_low_battery_to_charge():
+    """TST-43 / SM-18: SoC == low_stop_pct -> 'charge' (uses <=)."""
+    assert refine_active_mode('dual', 20, 'serve', 20, 30) == 'charge'
+    assert refine_active_mode('dual', 19, 'serve', 20, 30) == 'charge'
+
+
+def test_refine_dual_mid_battery_to_dual_limit_from_non_dual():
+    """TST-44 / SM-18: low_stop_pct < SoC < threshold AND old != 'dual' -> 'dual-limit'."""
+    assert refine_active_mode('dual', 25, 'serve', 20, 30) == 'dual-limit'
+    assert refine_active_mode('dual', 21, 'charge', 20, 30) == 'dual-limit'
+    assert refine_active_mode('dual', 29, 'serve', 20, 30) == 'dual-limit'
+
+
+def test_refine_dual_mid_battery_anti_bounce_from_dual():
+    """TST-45 / SM-18: same mid-SoC but old == 'dual' -> stays 'dual' (anti-bounce)."""
+    assert refine_active_mode('dual', 25, 'dual', 20, 30) == 'dual'
+    assert refine_active_mode('dual', 21, 'dual', 20, 30) == 'dual'
+
+
+def test_refine_dual_high_battery_to_dual():
+    """TST-46 / SM-18: SoC >= threshold -> 'dual' regardless of old_mode."""
+    assert refine_active_mode('dual', 30, 'serve', 20, 30) == 'dual'
+    assert refine_active_mode('dual', 80, 'serve', 20, 30) == 'dual'
+    assert refine_active_mode('dual', 30, 'dual', 20, 30) == 'dual'
+
+
+def test_refine_dual_at_threshold_uses_strict_less():
+    """TST-47 / SM-18: SoC == threshold -> 'dual' (strict < to threshold)."""
+    assert refine_active_mode('dual', 30, 'serve', 20, 30) == 'dual'
+
+
+# ============================================================================
+# compute_setpoint dual-limit (SP-14, SP-15) — TST-48..52
+# ============================================================================
+
+def test_compute_dual_limit_caps_at_solar_input():
+    """TST-48 / SP-14: dual-limit clamps to quantized solar_input_power, no margin."""
+    # power_con=500, target=485, quantized=480
+    # solar=300 -> solar_cap=(300//30)*30=300; min(480, 300) = 300
+    sp = compute_setpoint(**_serve_args(mode='dual-limit', power_con=500, solar_input_power=300))
+    assert sp == 300
+
+
+def test_compute_dual_limit_target_below_solar_cap():
+    """TST-49 / SP-14: when target < solar_cap, target wins."""
+    # power_con=200, target=185, quantized=180; solar=300, cap=300; min=180
+    sp = compute_setpoint(**_serve_args(mode='dual-limit', power_con=200, solar_input_power=300))
+    assert sp == 180
+
+
+def test_compute_dual_limit_zero_solar_zero_setpoint():
+    """TST-50 / SP-14: solar=0 -> cap=0 -> setpoint=0 even with positive target."""
+    sp = compute_setpoint(**_serve_args(mode='dual-limit', power_con=500, solar_input_power=0))
+    assert sp == 0
+
+
+def test_compute_dual_limit_bypass_now_lifts_cap():
+    """TST-51 / SP-15: bypass_now=True overrides solar cap up to dual_max_power=600."""
+    # power_con=1000, target=985, quantized=960; without override capped at solar=300
+    # With override: cap = 600; min(960, 600) = 600
+    sp = compute_setpoint(**_serve_args(
+        mode='dual-limit', power_con=1000, solar_input_power=300,
+        bypass_now=True,
+    ))
+    assert sp == 600
+
+
+def test_compute_dual_limit_recent_bypass_lifts_cap():
+    """TST-52 / SP-15: hours_since_last_bypass < bypass_grace_hours lifts cap to dual_max_power."""
+    sp = compute_setpoint(**_serve_args(
+        mode='dual-limit', power_con=1000, solar_input_power=300,
+        hours_since_last_bypass=2.5, bypass_grace_hours=4,
+    ))
+    assert sp == 600
+    # Boundary: hours == grace -> override does NOT fire (strict <).
+    sp = compute_setpoint(**_serve_args(
+        mode='dual-limit', power_con=1000, solar_input_power=300,
+        hours_since_last_bypass=4, bypass_grace_hours=4,
+    ))
+    assert sp == 300
+
+
+# ============================================================================
+# pick_mode_payload dual-limit (SM-19) — TST-53..54
+# ============================================================================
+
+def test_pick_payload_serve_to_dual_limit_no_payload():
+    """TST-53 / SM-19: any -> dual-limit emits no MQTT payload (refine_active_mode
+    already validated SoC; setpoint loop applies the cap)."""
+    payload, mode = pick_mode_payload(
+        old_mode='serve', new_mode='dual-limit', bypass_now=False,
+        electric_level=25, days_since_last_bypass=3, low_minsoc=100, med_minsoc=200,
+    )
+    assert payload is None
+    assert mode == 'dual-limit'
+
+
+def test_pick_payload_dual_limit_same_mode_no_bypass_quiet():
+    """TST-54 / SM-19: dual-limit -> dual-limit with no bypass -> (None, dual-limit)."""
+    payload, mode = pick_mode_payload(
+        old_mode='dual-limit', new_mode='dual-limit', bypass_now=False,
+        electric_level=25, days_since_last_bypass=3, low_minsoc=100, med_minsoc=200,
+    )
+    assert payload is None
+    assert mode == 'dual-limit'

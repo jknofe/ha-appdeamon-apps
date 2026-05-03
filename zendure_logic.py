@@ -8,7 +8,7 @@ REQ IDs (BT-, SM-, SP-) it covers.
 
 # Anything outside this set ('unknown' / 'unavailable' / None from HA) is
 # treated as "no previous mode" per SM-7 in pick_mode_payload.
-KNOWN_MODES = ('serve', 'charge', 'dual')
+KNOWN_MODES = ('serve', 'charge', 'dual', 'dual-limit')
 
 
 def is_bypass_active(electric_level, packstate, outputpackpower, solarinputpower, solar_threshold):
@@ -41,6 +41,29 @@ def bypass_status(app_active, zendure_active):
 def pick_operation_mode(hour, schedule):
     """Hour-based mode lookup. See SM-4, SM-5."""
     return schedule[hour]
+
+
+def refine_active_mode(scheduled_mode, electric_level, old_mode, low_stop_pct, dual_limit_threshold_pct):
+    """Refine 'dual' to charge/dual-limit/dual based on battery state. See SM-18.
+
+    For non-'dual' scheduled entries returns input unchanged. For 'dual' hours
+    (the battery-active window), production parity:
+
+      level <= low_stop_pct                                -> 'charge'
+      level <  dual_limit_threshold_pct AND old != 'dual'  -> 'dual-limit'
+      otherwise                                            -> 'dual'
+
+    The `old_mode != 'dual'` anti-bounce keeps us from downgrading mid-day:
+    once we've committed to draining (already in 'dual'), a transient SoC dip
+    below 30% should not yank us back to dual-limit only-from-solar mode.
+    """
+    if scheduled_mode != 'dual':
+        return scheduled_mode
+    if electric_level <= low_stop_pct:
+        return 'charge'
+    if electric_level < dual_limit_threshold_pct and old_mode != 'dual':
+        return 'dual-limit'
+    return 'dual'
 
 
 def pick_mode_payload(old_mode, new_mode, bypass_now, electric_level,
@@ -92,6 +115,12 @@ def pick_mode_payload(old_mode, new_mode, bypass_now, electric_level,
         # SM-12: dual itself emits no payload; setpoint loop handles caps.
         return None, 'dual'
 
+    if new_mode == 'dual-limit':
+        # SM-19: dual-limit emits no payload — refine_active_mode already
+        # validated SoC against low_stop_pct, and the setpoint loop applies
+        # the solar-input cap. No transition guard needed.
+        return None, 'dual-limit'
+
     # Defensive: unknown new_mode shouldn't reach here (apps.yaml validates it).
     return None, old_mode
 
@@ -120,10 +149,12 @@ def derive_bypass_now(outputpackpower, packstate):
 
 def compute_setpoint(power_con, power_sol, mode, solar_input_power, electric_level,
                      batt_low_stop, inverter_max_power, dual_max_power, dual_solar_margin,
-                     power_step, target_bias_steps):
-    """Compute the inverter outputLimit setpoint. See SP-5..SP-11.
+                     power_step, target_bias_steps,
+                     bypass_now=False, hours_since_last_bypass=999, bypass_grace_hours=4):
+    """Compute the inverter outputLimit setpoint. See SP-5..SP-11, SP-14..SP-15.
 
-    Pipeline: raw target -> quantize -> mode cap -> battery guard -> clamp.
+    Pipeline: raw target -> quantize -> mode cap -> bypass-grace override
+    -> battery guard -> clamp.
 
     The half-step bias (target_bias_steps = 0.5) shaves half a step off the
     raw target before flooring. Without it the quantizer consistently
@@ -131,14 +162,12 @@ def compute_setpoint(power_con, power_sol, mode, solar_input_power, electric_lev
     a step boundary, causing visible export to the grid. Half-step bias
     shifts the rounding point to the midpoint, so on average we
     under-produce by half a step instead of over-producing by a full one.
-    Recent user tuning, port verbatim.
     """
     # SP-7: charge forces 0 regardless of all other inputs.
     if mode == 'charge':
         return 0
 
-    # SP-5 + SP-6: bias and quantize. Floor-division on a float yields a
-    # float, hence the int() at return.
+    # SP-5 + SP-6: bias and quantize.
     raw_target = power_con - power_sol - (power_step * target_bias_steps)
     quantized_target = (raw_target // power_step) * power_step
 
@@ -148,23 +177,35 @@ def compute_setpoint(power_con, power_sol, mode, solar_input_power, electric_lev
         # past what the sun is providing — that would defeat 'dual'.
         half_solar = ((solar_input_power - dual_solar_margin) // power_step) * power_step
         if half_solar < 0:
-            # Cloudy / dawn / dusk — clamp before it caps the setpoint.
             half_solar = 0
         cap = dual_max_power
         setpoint = min(quantized_target, half_solar, cap)
+    elif mode == 'dual-limit':
+        # SP-14: cap at the inverter's current solar input, quantized. Net
+        # effect: output exactly matches solar production, so the battery
+        # never drains. Used in the SoC band between low_stop and
+        # dual_limit_threshold to keep topping up on bad-weather days.
+        solar_cap = (solar_input_power // power_step) * power_step
+        if solar_cap < 0:
+            solar_cap = 0
+        cap = solar_cap
+        setpoint = min(quantized_target, cap)
+        # SP-15: bypass-grace override. If we're currently in bypass OR a
+        # bypass landed within the last `bypass_grace_hours`, the battery is
+        # known full enough to drain freely — lift the cap to dual_max_power
+        # so we actually use that fresh charge instead of hoarding it.
+        if bypass_now or hours_since_last_bypass < bypass_grace_hours:
+            cap = dual_max_power
+            setpoint = min(quantized_target, cap)
     else:
         cap = inverter_max_power
         setpoint = quantized_target
 
     # SP-10: battery protection. No latch, no hysteresis (TST-36 pins this).
-    # The previous design latched a `battery_discharged` flag the user had to
-    # clear by hand; a 1 % SoC bounce ping-ponging discharge on/off turned
-    # out to be less harmful than the stuck latch.
     if electric_level <= batt_low_stop:
         setpoint = 0
 
-    # SP-11: clamp to [0, cap]. Negative target = we're already net-exporting;
-    # the inverter idles rather than pushing power backwards.
+    # SP-11: clamp to [0, cap].
     if setpoint < 0:
         setpoint = 0
     if setpoint > cap:

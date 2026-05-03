@@ -14,7 +14,13 @@ import json
 import appdaemon.plugins.hass.hassapi as hass
 
 from app_helpers import next_aligned_minute, parse_interval
-from zendure_logic import bypass_status, is_bypass_active, pick_mode_payload, pick_operation_mode
+from zendure_logic import (
+    bypass_status,
+    is_bypass_active,
+    pick_mode_payload,
+    pick_operation_mode,
+    refine_active_mode,
+)
 
 
 class ZendureStateMachine(hass.Hass):
@@ -35,6 +41,10 @@ class ZendureStateMachine(hass.Hass):
         self.schedule = self.args["schedule"]
         self.low_minsoc = self.args.get("low_batt_minsoc", 100)
         self.med_minsoc = self.args.get("med_batt_minsoc", 200)
+        # SM-18: thresholds that turn the static schedule's 'dual' slots into
+        # charge / dual-limit / dual based on current SoC.
+        self.mode_pick_low_stop_pct = self.args.get("mode_pick_low_stop_pct", 20)
+        self.dual_limit_threshold_pct = self.args.get("dual_limit_threshold_pct", 30)
         bypass = self.args.get("bypass_tracker", {})
         self.bypass_debounce_seconds = bypass.get("debounce_seconds", 60)
         self.solar_threshold_w = bypass.get("solar_threshold_w", 50)
@@ -166,7 +176,16 @@ class ZendureStateMachine(hass.Hass):
         try:
             now = self.datetime()
             old_mode = self.get_state("zendure.operation_mode")
-            new_mode = pick_operation_mode(now.hour, self.schedule)
+            scheduled_mode = pick_operation_mode(now.hour, self.schedule)
+            # SM-18: refine 'dual' to charge/dual-limit/dual based on SoC.
+            electric_level = self._get_state_int("sensor.zendure_mqtt_electriclevel")
+            new_mode = refine_active_mode(
+                scheduled_mode,
+                electric_level,
+                old_mode,
+                self.mode_pick_low_stop_pct,
+                self.dual_limit_threshold_pct,
+            )
 
             # SM-7: cold-start. Adopt new_mode silently, no transition payload.
             if old_mode in (None, "unknown", "unavailable"):
