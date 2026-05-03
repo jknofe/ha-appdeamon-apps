@@ -14,7 +14,7 @@ import json
 import appdaemon.plugins.hass.hassapi as hass
 
 from app_helpers import parse_interval
-from zendure_logic import compute_setpoint, derive_bypass_now
+from zendure_logic import battery_discharged_latch, compute_setpoint, derive_bypass_now
 
 
 class ZendureSetpoint(hass.Hass):
@@ -36,6 +36,13 @@ class ZendureSetpoint(hass.Hass):
         # cap is lifted to dual_max_power (the freshly-charged battery is
         # safe to drain).
         self.bypass_grace_hours = self.args.get("bypass_grace_hours", 4)
+        # SP-16: battery-discharged latch hysteresis. Once level <= batt_low_stop
+        # the latch sticks until level >= batt_low_stop + hysteresis, so a 1%
+        # SoC bounce can't ping-pong discharge on/off.
+        self.batt_low_stop_hysteresis_pct = self.args.get("batt_low_stop_hysteresis_pct", 5)
+        # In-memory latch; bootstrap from HA so we don't drop a latched
+        # state across an AppDaemon restart.
+        self._battery_discharged = self._bootstrap_battery_discharged()
 
         self._is_running = False
 
@@ -66,13 +73,24 @@ class ZendureSetpoint(hass.Hass):
                 mode = "serve"
 
             power_con = self._get_state_int("sensor.power_consumption")
-            power_sol = self._get_state_int("sensor.hm_400_power")
+            power_sol = self._read_power_sol()
             solar_input_power = self._get_state_int("sensor.zendure_mqtt_solarinputpower")
             electric_level = self._get_state_int("sensor.zendure_mqtt_electriclevel")
             outputpackpower = self._get_state_int("sensor.zendure_mqtt_outputpackpower")
             packstate = self.get_state("sensor.zendure_mqtt_packstate") or ""
             bypass_now = derive_bypass_now(outputpackpower, packstate)
             hours_since_last_bypass = self._hours_since_last_bypass()
+
+            # SP-16: update the discharge latch BEFORE computing setpoint, so a
+            # fresh transition takes effect this tick. set_state only when the
+            # bool flips to keep HA history clean.
+            new_latched = battery_discharged_latch(
+                electric_level, self.batt_low_stop,
+                self.batt_low_stop_hysteresis_pct, self._battery_discharged,
+            )
+            if new_latched != self._battery_discharged:
+                self._battery_discharged = new_latched
+                self._write_battery_discharged_sensor(new_latched)
 
             # Hybrid config: helper overrides apps.yaml default if set (CFG-7).
             inverter_max_power = int(self._helper_or_default(
@@ -96,6 +114,7 @@ class ZendureSetpoint(hass.Hass):
                 bypass_now=bypass_now,
                 hours_since_last_bypass=hours_since_last_bypass,
                 bypass_grace_hours=self.bypass_grace_hours,
+                battery_discharged=self._battery_discharged,
             )
 
             self._write_setpoint(setpoint)
@@ -155,6 +174,44 @@ class ZendureSetpoint(hass.Hass):
             return int(float(val))
         except (ValueError, TypeError):
             return default
+
+    def _read_power_sol(self):
+        """SP-17: prefer sensor.hm_400_power; fall back to sensor.hm_400_power_fallback
+        when the primary is unavailable. Matches the production script's behaviour
+        when the inverter's WiFi drops."""
+        primary = self.get_state("sensor.hm_400_power")
+        if primary not in (None, "unknown", "unavailable"):
+            try:
+                return int(float(primary))
+            except (ValueError, TypeError):
+                pass
+        return self._get_state_int("sensor.hm_400_power_fallback")
+
+    def _bootstrap_battery_discharged(self):
+        """SP-16: restore latch state from HA across AppDaemon restarts.
+
+        We accept either our shadow sensor or the legacy `zendure.battery_discharged`
+        entity (string 'True'/'False' per the production script's format). Default
+        to False if neither exists.
+        """
+        for entity in ("sensor.zendure_battery_discharged_shadow",
+                       "zendure.battery_discharged"):
+            state = self.get_state(entity)
+            if state in (None, "unknown", "unavailable"):
+                continue
+            return str(state).lower() in ("true", "on")
+        return False
+
+    def _write_battery_discharged_sensor(self, latched):
+        state_str = "True" if latched else "False"
+        attrs = {"friendly_name": "Zendure Battery Discharged (shadow)"}
+        if self._dry_run():
+            self.set_state("sensor.zendure_battery_discharged_shadow",
+                           state=state_str, attributes=attrs)
+        else:
+            attrs["friendly_name"] = "Zendure Battery Discharged"
+            self.set_state("sensor.zendure_battery_discharged",
+                           state=state_str, attributes=attrs)
 
     def _hours_since_last_bypass(self):
         """Hours since the last confirmed bypass, read from sensor.zendure_bypass_reached_at.

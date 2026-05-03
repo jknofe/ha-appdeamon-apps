@@ -43,6 +43,34 @@ def pick_operation_mode(hour, schedule):
     return schedule[hour]
 
 
+def force_weekly_charge(mode, hours_since_last_bypass, weekly_charge_hours):
+    """Final override: if it's been too long since a confirmed bypass, force 'charge'. See SM-20.
+
+    Production parity: 7.5 d (174 h) without a confirmed bypass forces a
+    full charge regardless of hour-of-day or SoC. Ensures the battery
+    cycles to full at least weekly even in winter / multi-day overcast.
+    """
+    if hours_since_last_bypass >= weekly_charge_hours:
+        return 'charge'
+    return mode
+
+
+def battery_discharged_latch(electric_level, batt_low_stop, hysteresis_pct, prev_latched):
+    """Latch with hysteresis to keep us OFF discharge once the floor is hit. See SP-16.
+
+    - Not latched + level <= floor               -> latch ON
+    - Already latched + level >= floor+hysteresis -> latch OFF
+    - Otherwise (between)                         -> hold previous
+
+    Production uses a 5 % hysteresis. Without it a 1 % SoC bounce flaps
+    discharge on/off; without the latch at all, recovery from low SoC
+    re-enables discharge before any meaningful charge has accumulated.
+    """
+    if not prev_latched:
+        return electric_level <= batt_low_stop
+    return electric_level < batt_low_stop + hysteresis_pct
+
+
 def refine_active_mode(scheduled_mode, electric_level, old_mode, low_stop_pct, dual_limit_threshold_pct):
     """Refine 'dual' to charge/dual-limit/dual based on battery state. See SM-18.
 
@@ -150,7 +178,8 @@ def derive_bypass_now(outputpackpower, packstate):
 def compute_setpoint(power_con, power_sol, mode, solar_input_power, electric_level,
                      batt_low_stop, inverter_max_power, dual_max_power, dual_solar_margin,
                      power_step, target_bias_steps,
-                     bypass_now=False, hours_since_last_bypass=999, bypass_grace_hours=4):
+                     bypass_now=False, hours_since_last_bypass=999, bypass_grace_hours=4,
+                     battery_discharged=False):
     """Compute the inverter outputLimit setpoint. See SP-5..SP-11, SP-14..SP-15.
 
     Pipeline: raw target -> quantize -> mode cap -> bypass-grace override
@@ -201,8 +230,11 @@ def compute_setpoint(power_con, power_sol, mode, solar_input_power, electric_lev
         cap = inverter_max_power
         setpoint = quantized_target
 
-    # SP-10: battery protection. No latch, no hysteresis (TST-36 pins this).
-    if electric_level <= batt_low_stop:
+    # SP-10 / SP-16: battery protection. The simple `level <= batt_low_stop`
+    # check still fires; the optional `battery_discharged` latch (computed by
+    # the caller via battery_discharged_latch()) extends the lockout above
+    # batt_low_stop until level recovers by hysteresis_pct.
+    if electric_level <= batt_low_stop or battery_discharged:
         setpoint = 0
 
     # SP-11: clamp to [0, cap].

@@ -6,12 +6,14 @@ cites the specific TST-N + REQ ID it covers so coverage is traceable.
 import pytest
 
 from zendure_logic import (
+    battery_discharged_latch,
     bypass_status,
-    is_bypass_active,
-    pick_operation_mode,
-    pick_mode_payload,
-    derive_bypass_now,
     compute_setpoint,
+    derive_bypass_now,
+    force_weekly_charge,
+    is_bypass_active,
+    pick_mode_payload,
+    pick_operation_mode,
     refine_active_mode,
 )
 
@@ -506,3 +508,87 @@ def test_pick_payload_dual_limit_same_mode_no_bypass_quiet():
     )
     assert payload is None
     assert mode == 'dual-limit'
+
+
+# ============================================================================
+# force_weekly_charge (SM-20) — TST-55..58
+# ============================================================================
+
+def test_force_weekly_charge_below_threshold_passes_through():
+    """TST-55 / SM-20: hours_since < threshold -> mode unchanged."""
+    assert force_weekly_charge('serve', 100, 174) == 'serve'
+    assert force_weekly_charge('dual', 173.9, 174) == 'dual'
+    assert force_weekly_charge('dual-limit', 0, 174) == 'dual-limit'
+
+
+def test_force_weekly_charge_at_threshold_forces_charge():
+    """TST-56 / SM-20: hours_since == threshold -> 'charge' (uses >=)."""
+    assert force_weekly_charge('serve', 174, 174) == 'charge'
+    assert force_weekly_charge('dual', 174, 174) == 'charge'
+
+
+def test_force_weekly_charge_well_above_threshold():
+    """TST-57 / SM-20: any mode -> 'charge' when hours far exceed threshold."""
+    assert force_weekly_charge('serve', 999, 174) == 'charge'
+    assert force_weekly_charge('dual-limit', 500, 174) == 'charge'
+
+
+def test_force_weekly_charge_already_charge_stays_charge():
+    """TST-58 / SM-20: charge stays charge, threshold doesn't matter."""
+    assert force_weekly_charge('charge', 50, 174) == 'charge'
+    assert force_weekly_charge('charge', 200, 174) == 'charge'
+
+
+# ============================================================================
+# battery_discharged_latch (SP-16) — TST-59..63
+# ============================================================================
+
+def test_latch_off_high_level_stays_off():
+    """TST-59 / SP-16: latch False, level well above floor -> stays False."""
+    assert battery_discharged_latch(50, 10, 5, prev_latched=False) is False
+
+
+def test_latch_off_drops_to_floor_engages():
+    """TST-60 / SP-16: latch False, level <= floor -> latch engages."""
+    assert battery_discharged_latch(10, 10, 5, prev_latched=False) is True
+    assert battery_discharged_latch(9, 10, 5, prev_latched=False) is True
+
+
+def test_latch_on_partial_recovery_holds():
+    """TST-61 / SP-16: latch True, level recovered but not by hysteresis -> still latched.
+
+    floor=10, hysteresis=5 means release at >=15. Levels 11..14 hold the latch.
+    """
+    assert battery_discharged_latch(11, 10, 5, prev_latched=True) is True
+    assert battery_discharged_latch(14, 10, 5, prev_latched=True) is True
+
+
+def test_latch_on_full_recovery_releases():
+    """TST-62 / SP-16: latch True, level >= floor + hysteresis -> latch releases."""
+    assert battery_discharged_latch(15, 10, 5, prev_latched=True) is False
+    assert battery_discharged_latch(20, 10, 5, prev_latched=True) is False
+
+
+def test_latch_no_chatter_at_floor():
+    """TST-63 / SP-16: with latch ON, dipping back to floor keeps latched (no flap)."""
+    assert battery_discharged_latch(10, 10, 5, prev_latched=True) is True
+
+
+# ============================================================================
+# compute_setpoint with battery_discharged latch (SP-16) — TST-64..65
+# ============================================================================
+
+def test_compute_setpoint_latched_forces_zero_above_floor():
+    """TST-64 / SP-16: battery_discharged=True forces 0 even if level > batt_low_stop."""
+    sp = compute_setpoint(**_serve_args(
+        power_con=300, electric_level=12, batt_low_stop=10, battery_discharged=True,
+    ))
+    assert sp == 0
+
+
+def test_compute_setpoint_latched_release_resumes_normal():
+    """TST-65 / SP-16: once unlatched, normal compute resumes (no residual force-zero)."""
+    sp = compute_setpoint(**_serve_args(
+        power_con=300, electric_level=20, batt_low_stop=10, battery_discharged=False,
+    ))
+    assert sp == 270  # same as TST-27 base case

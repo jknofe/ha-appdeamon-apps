@@ -71,6 +71,8 @@ Out of scope: the decoder/battery-state stubs, the existing `power_*.py` scripts
 - **SP-11** Final clamp: `0 ≤ setpoint ≤ cap`.
 - **SP-14** `mode == 'dual-limit'` applies cap = `(solarinputpower // power_step) * power_step` (quantized solar input, no margin), then `setpoint = min(quantized_target, cap)`. If solar is 0 / negative, cap = 0 → setpoint = 0. Net: output exactly tracks solar production; battery never drains. Used in the SoC band between `mode_pick_low_stop_pct` and `dual_limit_threshold_pct` to keep topping up on bad-weather days.
 - **SP-15** Bypass-grace cap override (applies in `dual-limit` only): if `bypass_now == True` OR `hours_since_last_bypass < bypass_grace_hours` (default 4), the cap is lifted to `dual_max_power`. Rationale: a freshly-charged battery is safe to drain freely; otherwise dual-limit would hoard the just-acquired charge.
+- **SP-16** Battery-discharged latch with hysteresis (pure function `battery_discharged_latch`). Once `electric_level <= batt_low_stop`, latch sticks True. Latch only releases when `electric_level >= batt_low_stop + batt_low_stop_hysteresis_pct` (default 5 %). While latched, `compute_setpoint` forces setpoint = 0 even if level has recovered above `batt_low_stop`. Caller maintains the latch in-memory (`self._battery_discharged`), bootstraps from HA on init (accepting either our shadow sensor or the legacy `zendure.battery_discharged` entity), and writes `sensor.zendure_battery_discharged_shadow` (`True`/`False` string, dry_run gated) on each flip.
+- **SP-17** Solar-input fallback. `power_sol` reads `sensor.hm_400_power`; if that entity is `unknown`/`unavailable`, fall back to `sensor.hm_400_power_fallback`. Matches the production script's fallback when the inverter's WiFi drops.
 
 ### Outputs
 - **SP-12** Setpoint is written to `sensor.zendure_setpoint` (live) or `sensor.zendure_setpoint_shadow` (shadow), state formatted as `repr(round(setpoint, 0))` to match the original script byte-for-byte. Attributes: `state_class: measurement`, `unit_of_measurement: W`, `device_class: power`, `friendly_name: 'Zendure Setpoint' / 'Zendure Setpoint (shadow)'`.
@@ -114,6 +116,7 @@ Out of scope: the decoder/battery-state stubs, the existing `power_*.py` scripts
 - **SM-14** No mode change but `bypass_now` (current mode) → `{"properties": {"outputLimit": 0, "passMode": 0, "minSoc": low_minsoc}}`.
 - **SM-15** No mode change and not `bypass_now` → no payload.
 - **SM-19** `→ dual-limit` (any prior mode): no payload, mode advances. `refine_active_mode` already validated SoC against `mode_pick_low_stop_pct`, and the setpoint loop applies the cap (SP-14). No transition guard at the state-machine layer.
+- **SM-20** Weekly-charge force (pure function `force_weekly_charge`). Final override applied AFTER `refine_active_mode`: if `hours_since_last_bypass >= weekly_charge_force_hours` (default 174 = 7.5 d), `new_mode = 'charge'` regardless of hour-of-day or SoC. Ensures the battery cycles to full at least once a week even in winter / multi-day overcast where `dual-limit` alone wouldn't reach bypass.
 
 ### Outputs
 - **SM-16** Effective mode written to `zendure.operation_mode` (live) or `sensor.zendure_operation_mode_shadow` (shadow). Shadow value is the same raw mode string for chart comparison.
@@ -219,6 +222,23 @@ Each test references the requirement ID it covers in its name (e.g. `test_sp5_po
 #### `pick_mode_payload` dual-limit (SM-19)
 - **TST-53** any → dual-limit → `(None, 'dual-limit')`
 - **TST-54** dual-limit → dual-limit, no bypass → `(None, 'dual-limit')`
+
+#### `force_weekly_charge` (SM-20)
+- **TST-55** hours_since < threshold → mode unchanged
+- **TST-56** hours_since == threshold → `'charge'` (uses `>=`)
+- **TST-57** hours_since well above threshold → `'charge'` for any mode
+- **TST-58** mode already `'charge'` → stays `'charge'`
+
+#### `battery_discharged_latch` (SP-16)
+- **TST-59** latch off, level >> floor → stays off
+- **TST-60** latch off, level <= floor → engages (boundary `==` and `<`)
+- **TST-61** latch on, level recovered partially (< floor + hysteresis) → holds
+- **TST-62** latch on, level fully recovered (>= floor + hysteresis) → releases
+- **TST-63** latch on, level dipping back to floor → holds (no chatter)
+
+#### `compute_setpoint` battery_discharged (SP-16)
+- **TST-64** battery_discharged=True with level > floor → forces 0
+- **TST-65** battery_discharged=False with healthy level → normal setpoint resumes
 
 #### `pick_operation_mode` (SM-4, SM-5)
 - **TST-7** Hours 0, 5 → `serve`

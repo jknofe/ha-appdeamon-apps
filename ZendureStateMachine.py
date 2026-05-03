@@ -16,6 +16,7 @@ import appdaemon.plugins.hass.hassapi as hass
 from app_helpers import next_aligned_minute, parse_interval
 from zendure_logic import (
     bypass_status,
+    force_weekly_charge,
     is_bypass_active,
     pick_mode_payload,
     pick_operation_mode,
@@ -45,6 +46,8 @@ class ZendureStateMachine(hass.Hass):
         # charge / dual-limit / dual based on current SoC.
         self.mode_pick_low_stop_pct = self.args.get("mode_pick_low_stop_pct", 20)
         self.dual_limit_threshold_pct = self.args.get("dual_limit_threshold_pct", 30)
+        # SM-20: force-charge after this many hours without a confirmed bypass.
+        self.weekly_charge_force_hours = self.args.get("weekly_charge_force_hours", 174)
         bypass = self.args.get("bypass_tracker", {})
         self.bypass_debounce_seconds = bypass.get("debounce_seconds", 60)
         self.solar_threshold_w = bypass.get("solar_threshold_w", 50)
@@ -185,6 +188,11 @@ class ZendureStateMachine(hass.Hass):
                 old_mode,
                 self.mode_pick_low_stop_pct,
                 self.dual_limit_threshold_pct,
+            )
+            # SM-20: hard override — too long since last bypass forces charge.
+            hours_since = (now - self._last_bypass_at).total_seconds() / 3600.0
+            new_mode = force_weekly_charge(
+                new_mode, hours_since, self.weekly_charge_force_hours
             )
 
             # SM-7: cold-start. Adopt new_mode silently, no transition payload.
