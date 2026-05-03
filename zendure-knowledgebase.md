@@ -43,6 +43,7 @@ Out of scope:
 | Q10 | Bypass-grace cap override (within `bypass_grace_hours` of last bypass, lift `dual-limit` cap to `dual_max_power`). | Don't hoard a freshly-charged battery. |
 | Q11 | `battery_discharged` latch with 5 % hysteresis. Once SoC ≤ `batt_low_stop`, latch sticks; only releases at `batt_low_stop + 5 %`. | A 1 % SoC bounce was flapping discharge on/off; keeping the latch flat avoids the chatter without trapping us at low SoC forever. |
 | Q12 | 174 h (7.5 d) without confirmed bypass force-overrides mode to `charge`. | Ensures weekly full-cycle in winter / multi-day overcast. |
+| Q13 | Discharge floor is **dynamic**, picked each tick by `effective_batt_low_stop`: 10 % when `bypass_now` or `hours_since_last_bypass < 10 h`, else 20 %. Functional/non-sticky equivalent of production's `zendure.batt_low_stop` writes from the state machine. | Symmetric story with `bypass_grace_hours` (cap override): freshly-charged battery is safe to drain deeper; no recent bypass means keep a 20 % reserve. Re-evaluating per tick avoids the sticky-state bookkeeping of writing/reading `zendure.batt_low_stop`. |
 
 ## MQTT topics
 
@@ -106,7 +107,9 @@ zendure_setpoint:
   dual_mode_max_power: 600
   dual_mode_solar_margin: 60           # half_solar = solarInputPower − margin
   power_step: 30
-  batt_low_stop: 10                    # %
+  batt_low_stop_after_bypass: 10       # % — floor inside post-bypass window (drain deeper)
+  batt_low_stop_default: 20            # % — floor outside post-bypass window
+  low_stop_after_bypass_hours: 10      # h — within this window of last bypass use *_after_bypass
   power_target_bias_steps: 0.5         # subtract this many steps from raw target
   bypass_grace_hours: 4                # within N h of last bypass, dual-limit cap → dual_max_power
   batt_low_stop_hysteresis_pct: 5      # latch releases only after SoC recovers by this %
@@ -140,16 +143,17 @@ zendure_state_machine:
 1. Read consumption / solar (with fallback) / battery / mqtt-derived sensors and `zendure.operation_mode`.
 2. Derive `bypass_now = (outputpackpower == 0) AND (packstate == 'idle')`.
 3. Compute `hours_since_last_bypass` from `sensor.zendure_bypass_reached_at`.
-4. Update `battery_discharged` latch via `battery_discharged_latch(level, batt_low_stop, hysteresis_pct, prev)`. Write `sensor.zendure_battery_discharged_shadow` only when the bool flips.
-5. Raw target: `power_con − power_sol − (power_step * power_target_bias_steps)`. Quantize to `power_step`.
-6. Apply mode cap:
+4. Pick effective floor: `batt_low_stop = effective_batt_low_stop(bypass_now, hours_since_last_bypass, after_bypass=10, default=20, window_h=10)`.
+5. Update `battery_discharged` latch via `battery_discharged_latch(level, batt_low_stop, hysteresis_pct, prev)`. Write `sensor.zendure_battery_discharged_shadow` only when the bool flips.
+6. Raw target: `power_con − power_sol − (power_step * power_target_bias_steps)`. Quantize to `power_step`.
+7. Apply mode cap:
    - `charge` → setpoint = 0.
    - `dual` → cap = `dual_max_power` (600); also `setpoint = min(setpoint, half_solar)` where `half_solar = ((solarInputPower − dual_solar_margin) // step) * step`.
    - `dual-limit` → cap = `(solarInputPower // step) * step`. If `bypass_now` OR `hours_since_last_bypass < bypass_grace_hours` → cap lifts to `dual_max_power`.
    - default (`serve` / unknown) → cap = `inverter_max_power` (helper-overridable).
-7. Battery protection: `electric_level ≤ batt_low_stop` OR `battery_discharged` → setpoint = 0.
-8. Clamp `0 ≤ setpoint ≤ cap`.
-9. If changed since last publish → publish MQTT `outputLimit`. Always update `sensor.zendure_setpoint` (or `*_shadow`).
+8. Battery protection: `electric_level ≤ batt_low_stop` OR `battery_discharged` → setpoint = 0.
+9. Clamp `0 ≤ setpoint ≤ cap`.
+10. If changed since last publish → publish MQTT `outputLimit`. Always update `sensor.zendure_setpoint` (or `*_shadow`).
 
 ### State machine (every 20 min, aligned to clock boundaries)
 

@@ -55,6 +55,22 @@ def force_weekly_charge(mode, hours_since_last_bypass, weekly_charge_hours):
     return mode
 
 
+def effective_batt_low_stop(bypass_now, hours_since_last_bypass,
+                            after_bypass_pct, default_pct, window_hours):
+    """Pick the active discharge floor based on bypass recency. See SP-18.
+
+    Production sets `zendure.batt_low_stop` dynamically: 10 % within ~10 h of
+    a bypass moment (or while bypass is live), 20 % otherwise. This is the
+    functional, non-sticky equivalent — re-evaluated each tick rather than
+    persisted between mode transitions. Trade-off: on the bypass-window
+    boundary the floor flips back to 20 % cleanly, where production stays at
+    10 % until the next mode transition rewrites it.
+    """
+    if bypass_now or hours_since_last_bypass < window_hours:
+        return after_bypass_pct
+    return default_pct
+
+
 def battery_discharged_latch(electric_level, batt_low_stop, hysteresis_pct, prev_latched):
     """Latch with hysteresis to keep us OFF discharge once the floor is hit. See SP-16.
 

@@ -10,6 +10,7 @@ from zendure_logic import (
     bypass_status,
     compute_setpoint,
     derive_bypass_now,
+    effective_batt_low_stop,
     force_weekly_charge,
     is_bypass_active,
     pick_mode_payload,
@@ -592,3 +593,32 @@ def test_compute_setpoint_latched_release_resumes_normal():
         power_con=300, electric_level=20, batt_low_stop=10, battery_discharged=False,
     ))
     assert sp == 270  # same as TST-27 base case
+
+
+# ============================================================================
+# effective_batt_low_stop (SP-18) — TST-66..70
+# ============================================================================
+
+def test_effective_low_stop_bypass_now_returns_after():
+    """TST-66 / SP-18: bypass_now=True picks the after-bypass floor regardless of hours."""
+    assert effective_batt_low_stop(True, 999.0, 10, 20, 10) == 10
+
+
+def test_effective_low_stop_inside_window_returns_after():
+    """TST-67 / SP-18: hours < window picks after-bypass floor."""
+    assert effective_batt_low_stop(False, 5.0, 10, 20, 10) == 10
+
+
+def test_effective_low_stop_at_window_boundary_returns_default():
+    """TST-68 / SP-18: hours == window flips to default (strict <)."""
+    assert effective_batt_low_stop(False, 10.0, 10, 20, 10) == 20
+
+
+def test_effective_low_stop_outside_window_returns_default():
+    """TST-69 / SP-18: hours > window picks default floor."""
+    assert effective_batt_low_stop(False, 24.0, 10, 20, 10) == 20
+
+
+def test_effective_low_stop_bypass_now_overrides_stale_hours():
+    """TST-70 / SP-18: bypass_now wins over a stale hours_since_last_bypass."""
+    assert effective_batt_low_stop(True, 9999.0, 10, 20, 10) == 10

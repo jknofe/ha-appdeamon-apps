@@ -26,8 +26,11 @@ Out of scope: decoder/battery-state stubs, the legacy `power_*.py` (covered by
 | `inverter_max_power` | Default cap on `outputLimit`, helper-overridable, default 390 W |
 | `dual_max_power` | Cap in `dual` and bypass-grace-overridden `dual-limit`, default 600 W |
 | `dual_solar_margin` | Margin subtracted from solar input in `dual`, default 60 W |
-| `batt_low_stop` | SoC % below which setpoint is forced to 0, default 10 |
-| `batt_low_stop_hysteresis_pct` | Recovery margin above `batt_low_stop` before the discharge latch releases, default 5 |
+| `batt_low_stop` | Effective SoC % below which setpoint is forced to 0. **Dynamic** per SP-18 — picked each tick from `*_after_bypass` / `*_default` based on bypass recency. |
+| `batt_low_stop_after_bypass` | Floor inside the post-bypass window, default 10 (production parity: deeper drain allowed once battery just hit full) |
+| `batt_low_stop_default` | Floor outside the post-bypass window, default 20 (preserves reserve until next charge cycle) |
+| `low_stop_after_bypass_hours` | Window after last bypass during which `*_after_bypass` applies, default 10 |
+| `batt_low_stop_hysteresis_pct` | Recovery margin above the effective `batt_low_stop` before the discharge latch releases, default 5 |
 | `low_minsoc` | minSoC value used in low-stop MQTT payloads, fixed 100 (= 10 %) |
 | `med_minsoc` | minSoC value used in medium-stop MQTT payloads, fixed 200 (= 20 %) |
 | `power_target_bias_steps` | Steps subtracted from raw power target, fixed 0.5 |
@@ -84,6 +87,7 @@ Out of scope: decoder/battery-state stubs, the legacy `power_*.py` (covered by
 - **SP-15** Bypass-grace cap override (in `dual-limit` only): if `bypass_now == True` OR `hours_since_last_bypass < bypass_grace_hours`, cap lifts to `dual_max_power`. Rationale: a freshly-charged battery is safe to drain.
 - **SP-16** Battery-discharged latch with hysteresis (pure function `battery_discharged_latch`). Once `electric_level <= batt_low_stop`, latch sticks True. Releases only when `electric_level >= batt_low_stop + batt_low_stop_hysteresis_pct`. While latched, `compute_setpoint` forces 0 even above `batt_low_stop`. Caller maintains `self._battery_discharged` in memory, bootstraps from HA on init (accepting either `sensor.zendure_battery_discharged_shadow` or legacy `zendure.battery_discharged`), and writes `sensor.zendure_battery_discharged_shadow` (`True`/`False` string, dry_run-gated) only on flip.
 - **SP-17** Solar-input fallback. `power_sol` reads `sensor.hm_400_power`; if unavailable, falls back to `sensor.hm_400_power_fallback`. Matches the production fallback when the inverter's WiFi drops.
+- **SP-18** Dynamic discharge floor (pure function `effective_batt_low_stop`). Picked each tick: `batt_low_stop = batt_low_stop_after_bypass` (default 10) when `bypass_now` OR `hours_since_last_bypass < low_stop_after_bypass_hours` (default 10), else `batt_low_stop_default` (default 20). Mirrors production's dynamic `zendure.batt_low_stop` (10 % after a bypass to use more battery, 20 % otherwise) but re-evaluated each tick rather than persisted across mode transitions. Both `compute_setpoint` and `battery_discharged_latch` consume the effective value, so cutoff and hysteresis stay aligned.
 
 ### Outputs
 - **SP-12** Setpoint written to `sensor.zendure_setpoint` (live) or `sensor.zendure_setpoint_shadow` (shadow), state formatted as `repr(round(setpoint, 0))` to match the original byte-for-byte. Attributes: `state_class: measurement`, `unit_of_measurement: W`, `device_class: power`, `friendly_name: 'Zendure Setpoint' / 'Zendure Setpoint (shadow)'`.
@@ -163,7 +167,7 @@ Out of scope: decoder/battery-state stubs, the legacy `power_*.py` (covered by
 ### `apps.yaml`
 - **CFG-1** `update_interval` (parsed by `app_helpers.parse_interval`) for both apps.
 - **CFG-2** `mqtt_topic_write`, `mqtt_topic_read` for the device's MQTT topics.
-- **CFG-3** Setpoint constants: `inverter_max_power_default`, `dual_mode_max_power`, `dual_mode_solar_margin`, `power_step`, `batt_low_stop`, `power_target_bias_steps`, `bypass_grace_hours`, `batt_low_stop_hysteresis_pct`.
+- **CFG-3** Setpoint constants: `inverter_max_power_default`, `dual_mode_max_power`, `dual_mode_solar_margin`, `power_step`, `batt_low_stop_after_bypass`, `batt_low_stop_default`, `low_stop_after_bypass_hours`, `power_target_bias_steps`, `bypass_grace_hours`, `batt_low_stop_hysteresis_pct`.
 - **CFG-4** State-machine constants: `schedule` (24-slot list), `low_batt_minsoc`, `med_batt_minsoc`, `mode_pick_low_stop_pct`, `dual_limit_threshold_pct`, `weekly_charge_force_hours`.
 - **CFG-5** `bypass_tracker.debounce_seconds`, `bypass_tracker.solar_threshold_w`, `bypass_tracker.fallback_days_when_missing`.
 
@@ -293,6 +297,13 @@ Each test references the requirement ID it covers in its name and docstring.
 #### `compute_setpoint` battery_discharged (SP-16)
 - **TST-64** `battery_discharged=True` with level > floor → forces 0
 - **TST-65** `battery_discharged=False` with healthy level → normal setpoint resumes
+
+#### `effective_batt_low_stop` (SP-18)
+- **TST-66** `bypass_now=True` → after-bypass floor regardless of hours
+- **TST-67** `hours < window` → after-bypass floor
+- **TST-68** `hours == window` → default floor (strict `<` boundary)
+- **TST-69** `hours > window` → default floor
+- **TST-70** `bypass_now=True` overrides a stale `hours_since_last_bypass` → after-bypass floor
 
 ### Layer 2 — Shadow-mode integration on HA
 

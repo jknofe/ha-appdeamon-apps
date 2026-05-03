@@ -14,7 +14,12 @@ import json
 import appdaemon.plugins.hass.hassapi as hass
 
 from app_helpers import parse_interval
-from zendure_logic import battery_discharged_latch, compute_setpoint, derive_bypass_now
+from zendure_logic import (
+    battery_discharged_latch,
+    compute_setpoint,
+    derive_bypass_now,
+    effective_batt_low_stop,
+)
 
 
 class ZendureSetpoint(hass.Hass):
@@ -29,7 +34,12 @@ class ZendureSetpoint(hass.Hass):
         self.dual_max_power = self.args.get("dual_mode_max_power", 600)
         self.dual_solar_margin = self.args.get("dual_mode_solar_margin", 60)
         self.power_step = self.args.get("power_step", 30)
-        self.batt_low_stop = self.args.get("batt_low_stop", 10)
+        # SP-18: production parity — discharge floor is dynamic. After a bypass
+        # moment (or while bypass is live), allow draining to 10 %; outside that
+        # window, hold 20 % so the battery keeps a reserve until next charge.
+        self.batt_low_stop_after_bypass = self.args.get("batt_low_stop_after_bypass", 10)
+        self.batt_low_stop_default = self.args.get("batt_low_stop_default", 20)
+        self.low_stop_after_bypass_hours = self.args.get("low_stop_after_bypass_hours", 10)
         self.power_target_bias_steps = self.args.get("power_target_bias_steps", 0.5)
         # SP-15: hours-since-last-bypass override window for dual-limit. Within
         # this many hours after a confirmed bypass moment, dual-limit's solar
@@ -81,11 +91,20 @@ class ZendureSetpoint(hass.Hass):
             bypass_now = derive_bypass_now(outputpackpower, packstate)
             hours_since_last_bypass = self._hours_since_last_bypass()
 
+            # SP-18: pick the active floor (10 % inside the post-bypass window,
+            # 20 % outside). Used by both the latch and compute_setpoint so the
+            # cutoff and the latch hysteresis stay aligned.
+            batt_low_stop = effective_batt_low_stop(
+                bypass_now, hours_since_last_bypass,
+                self.batt_low_stop_after_bypass, self.batt_low_stop_default,
+                self.low_stop_after_bypass_hours,
+            )
+
             # SP-16: update the discharge latch BEFORE computing setpoint, so a
             # fresh transition takes effect this tick. set_state only when the
             # bool flips to keep HA history clean.
             new_latched = battery_discharged_latch(
-                electric_level, self.batt_low_stop,
+                electric_level, batt_low_stop,
                 self.batt_low_stop_hysteresis_pct, self._battery_discharged,
             )
             if new_latched != self._battery_discharged:
@@ -105,7 +124,7 @@ class ZendureSetpoint(hass.Hass):
                 mode=mode,
                 solar_input_power=solar_input_power,
                 electric_level=electric_level,
-                batt_low_stop=self.batt_low_stop,
+                batt_low_stop=batt_low_stop,
                 inverter_max_power=inverter_max_power,
                 dual_max_power=self.dual_max_power,
                 dual_solar_margin=self.dual_solar_margin,
