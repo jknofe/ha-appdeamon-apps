@@ -198,6 +198,7 @@ A separate diagnostic sensor `sensor.zendure_bypass_active` is updated on every 
 - **Half-step bias and dual-mode `half_solar = solar − 60` are inherited tuning** from the production script. Port verbatim, revisit only if the soak window shows persistent unexplained divergence.
 - **60 s debounce / 50 W solar threshold** for the bypass tracker are estimates. Verify against the next live bypass event; tune if it false-triggers or misses.
 - **`input_select.zendure_operation_mode_strategy`** (manual override: force-serve / force-charge / etc.) is reserved for a future feature. Not wired up.
+- **HA recorder `purge_keep_days = 30` (backlog).** Default is 10 days. If `sensor.zendure_bypass_reached_at` goes that long without a real bypass and HA restarts in the window, the entity can come back `unknown` and the bootstrap falls back to `now − 7 d`. Bumping to 30 days neatly closes that gap (roughly 3× DB size; consider `recorder.exclude` for the very chatty `power_consumption` / `zendure_mqtt_*` if disk pressure becomes an issue). Defer until a real bypass moment is captured first; revisit if the spurious-`charge` divergence persists.
 
 ## Implementation refinements
 
