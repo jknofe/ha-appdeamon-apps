@@ -107,7 +107,7 @@ zendure_setpoint:
   power_step: 30
   batt_low_stop_after_bypass: 10       # % — floor inside post-bypass window (drain deeper)
   batt_low_stop_default: 20            # % — floor outside post-bypass window
-  low_stop_after_bypass_hours: 10      # h — within this window of last bypass use *_after_bypass
+  # post-bypass window is hard-coded 10 h (ZendureSetpoint.POST_BYPASS_WINDOW_HOURS)
   power_target_bias_steps: 0.5         # subtract this many steps from raw target
   batt_low_stop_hysteresis_pct: 5      # latch releases only after SoC recovers by this %
 

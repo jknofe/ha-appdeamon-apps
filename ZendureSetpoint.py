@@ -24,6 +24,11 @@ from zendure_logic import (
 
 class ZendureSetpoint(hass.Hass):
 
+    # SP-18: hours-since-last-bypass window during which the discharge floor
+    # uses *_after_bypass (deeper drain). Constant, not config — production
+    # also hard-codes 10 h here.
+    POST_BYPASS_WINDOW_HOURS = 10
+
     def initialize(self):
         # Config from apps.yaml (see knowledgebase / requirements §7)
         self.update_interval = parse_interval(self.args.get("update_interval", "20s"))
@@ -35,11 +40,11 @@ class ZendureSetpoint(hass.Hass):
         self.serve_cap = self.args.get("serve_cap", 540)
         self.power_step = self.args.get("power_step", 30)
         # SP-18: production parity — discharge floor is dynamic. After a bypass
-        # moment (or while bypass is live), allow draining to 10 %; outside that
-        # window, hold 20 % so the battery keeps a reserve until next charge.
+        # moment (or while bypass is live, or within POST_BYPASS_WINDOW_HOURS
+        # of one), allow draining to 10 %; outside that window, hold 20 % so
+        # the battery keeps a reserve until next charge.
         self.batt_low_stop_after_bypass = self.args.get("batt_low_stop_after_bypass", 10)
         self.batt_low_stop_default = self.args.get("batt_low_stop_default", 20)
-        self.low_stop_after_bypass_hours = self.args.get("low_stop_after_bypass_hours", 10)
         self.power_target_bias_steps = self.args.get("power_target_bias_steps", 0.5)
         # SP-16: battery-discharged latch hysteresis. Once level <= batt_low_stop
         # the latch sticks until level >= batt_low_stop + hysteresis, so a 1%
@@ -92,7 +97,7 @@ class ZendureSetpoint(hass.Hass):
             batt_low_stop = effective_batt_low_stop(
                 bypass_now, hours_since_last_bypass,
                 self.batt_low_stop_after_bypass, self.batt_low_stop_default,
-                self.low_stop_after_bypass_hours,
+                self.POST_BYPASS_WINDOW_HOURS,
             )
 
             # SP-16: update the discharge latch BEFORE computing setpoint, so a

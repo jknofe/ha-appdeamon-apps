@@ -37,7 +37,6 @@ zendure_setpoint:
   serve_cap: 540                  # W — cap in 'serve' (and unknown-mode fallback); lower to bound export overshoot when load drops between ticks
   power_step: 30
   batt_low_stop_after_bypass: 10  # % — floor inside the post-bypass window
-  batt_low_stop_default: 20       # % — floor outside the post-bypass window
-  low_stop_after_bypass_hours: 10 # h — within this window after last bypass, use *_after_bypass
+  batt_low_stop_default: 20       # % — floor outside the post-bypass window (window is hard-coded 10 h)
   power_target_bias_steps: 0.5    # subtract this many steps from raw target
   batt_low_stop_hysteresis_pct: 5 # latch releases only after SoC recovers by this many %
