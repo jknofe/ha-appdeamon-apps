@@ -39,7 +39,7 @@ class ZendureStateMachine(hass.Hass):
         self.update_interval = parse_interval(self.args.get("update_interval", "20min"))
         self.mqtt_topic_write = self.args["mqtt_topic_write"]
         self.mqtt_topic_read = self.args["mqtt_topic_read"]
-        self.schedule = self.args["schedule"]
+        self.schedule = self._load_schedule(self.args["schedule"])
         self.low_minsoc = self.args.get("low_batt_minsoc", 100)
         self.med_minsoc = self.args.get("med_batt_minsoc", 200)
         # SM-18: thresholds that turn the static schedule's 'dual' slots into
@@ -80,6 +80,24 @@ class ZendureStateMachine(hass.Hass):
         self.log(
             f"ZendureStateMachine started; aligned schedule starts at {next_start.isoformat()}"
         )
+
+    @staticmethod
+    def _load_schedule(raw):
+        """Accept the apps.yaml `schedule` as a dict {hour: mode} (preferred)
+        or a 24-element list (legacy). Return a dict with int keys 0..23 so
+        downstream `schedule[now.hour]` works either way. Validate that all
+        24 hours are present — a missing key would otherwise KeyError mid-tick.
+        """
+        if isinstance(raw, dict):
+            schedule = {int(k): v for k, v in raw.items()}
+        elif isinstance(raw, list):
+            schedule = {i: v for i, v in enumerate(raw)}
+        else:
+            raise ValueError(f"schedule must be a dict or list, got {type(raw).__name__}")
+        missing = [h for h in range(24) if h not in schedule]
+        if missing:
+            raise ValueError(f"schedule is missing hours {missing}")
+        return schedule
 
     # ------------------------------------------------------------------
     # Bypass tracker (BT-1..6)
