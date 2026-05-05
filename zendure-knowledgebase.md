@@ -117,33 +117,13 @@ zendure_state_machine:
   update_interval: "20min"
   mqtt_topic_write: "iot/73bkTV/SE7546CU/properties/write"
   mqtt_topic_read:  "iot/73bkTV/SE7546CU/properties/read"
-  # Hour-of-day -> mode. 'dual' = battery-active hour;
-  # refine_active_mode picks charge/dual-limit/dual at runtime.
+  # Sparse {hour: mode}: each entry sets the mode from that hour onward
+  # until the next entry; hour 0 wraps from the last defined hour
+  # (cyclical day). refine_active_mode picks charge/dual-limit/dual at
+  # runtime within the 'dual' slots.
   schedule:
-    0:  serve
-    1:  serve
-    2:  serve
-    3:  serve
-    4:  serve
-    5:  serve
-    6:  dual
-    7:  dual
-    8:  dual
-    9:  dual
-    10: dual
-    11: dual
-    12: dual
-    13: dual
-    14: dual
-    15: serve
-    16: serve
-    17: serve
-    18: serve
-    19: serve
-    20: serve
-    21: serve
-    22: serve
-    23: serve
+    6:  dual    # battery contributes 06:00..14:59
+    15: serve   # grid-direct 15:00..05:59 next day
   low_batt_minsoc: 100                 # 10 % * 10 (Zendure minSoc *10)
   med_batt_minsoc: 200                 # 20 % * 10
   mode_pick_low_stop_pct: 20           # SoC ≤ this → 'charge' during dual hours

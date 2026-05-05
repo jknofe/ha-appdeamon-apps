@@ -105,7 +105,7 @@ Out of scope: decoder/battery-state stubs, the legacy `power_*.py` (covered by
 
 ### Schedule (pure functions `pick_operation_mode`, `refine_active_mode`, `force_weekly_charge`)
 - **SM-4** Static 24-slot list from `apps.yaml`. Default: hours 0–5 → `serve`, 6–14 → `dual` (battery-active window), 15–23 → `serve`.
-- **SM-5** `scheduled_mode = schedule[now.hour]` — pure lookup, no SoC dependency. Schedule is stored as `{int hour: str mode}` after `_load_schedule` normalises (legacy list form also accepted; missing hours raise at init).
+- **SM-5** `scheduled_mode = schedule[now.hour]` — pure lookup, no SoC dependency. Schedule is stored as a dense `{int hour: str mode}` dict (all 24 hours filled) after `_load_schedule` forward-fills the sparse apps.yaml form. Hour 0 wraps from the highest defined hour so a single-entry schedule is valid; legacy dense list form also accepted.
 - **SM-18** Runtime refinement: `new_mode = refine_active_mode(scheduled_mode, electric_level, old_mode, mode_pick_low_stop_pct, dual_limit_threshold_pct)`. Non-`dual` slots returned unchanged. For `dual` slots:
   - `level <= mode_pick_low_stop_pct` (default 20 %) → `'charge'`.
   - `level < dual_limit_threshold_pct` (default 30 %) AND `old_mode != 'dual'` → `'dual-limit'`.
@@ -165,7 +165,7 @@ Out of scope: decoder/battery-state stubs, the legacy `power_*.py` (covered by
 - **CFG-1** `update_interval` (parsed by `app_helpers.parse_interval`) for both apps.
 - **CFG-2** `mqtt_topic_write`, `mqtt_topic_read` for the device's MQTT topics.
 - **CFG-3** Setpoint constants: `dual_cap`, `serve_cap`, `power_step`, `batt_low_stop_after_bypass`, `batt_low_stop_default`, `power_target_bias_steps`, `batt_low_stop_hysteresis_pct`. The post-bypass window length is the class constant `ZendureSetpoint.POST_BYPASS_WINDOW_HOURS`, not a config key.
-- **CFG-4** State-machine constants: `schedule` (24-key dict `{hour: mode}` covering all of `0..23`; legacy 24-slot list also accepted by `_load_schedule`), `low_batt_minsoc`, `med_batt_minsoc`, `mode_pick_low_stop_pct`, `dual_limit_threshold_pct`, `weekly_charge_force_hours`.
+- **CFG-4** State-machine constants: `schedule` (sparse `{hour: mode}` dict — each entry sets the mode from that hour onward until the next entry, hour 0 wraps from the last defined hour for the cyclical day boundary; legacy dense 24-slot list also accepted by `_load_schedule`), `low_batt_minsoc`, `med_batt_minsoc`, `mode_pick_low_stop_pct`, `dual_limit_threshold_pct`, `weekly_charge_force_hours`.
 - **CFG-5** `bypass_tracker.debounce_seconds`, `bypass_tracker.solar_threshold_w`, `bypass_tracker.fallback_days_when_missing`.
 
 ### HA helpers

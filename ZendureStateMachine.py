@@ -83,20 +83,33 @@ class ZendureStateMachine(hass.Hass):
 
     @staticmethod
     def _load_schedule(raw):
-        """Accept the apps.yaml `schedule` as a dict {hour: mode} (preferred)
-        or a 24-element list (legacy). Return a dict with int keys 0..23 so
-        downstream `schedule[now.hour]` works either way. Validate that all
-        24 hours are present — a missing key would otherwise KeyError mid-tick.
+        """Accept the apps.yaml `schedule` as a sparse dict {hour: mode}
+        (preferred) or a 24-element list (legacy). Sparse dicts are forward-
+        filled into a dense {0..23: mode} dict: each hour inherits the mode
+        from the highest defined hour ≤ it, wrapping around so hour 0
+        inherits from the last defined hour of the (cyclical) previous day.
+        Example: {7: 'dual', 15: 'serve'} → 0-6 serve (wrap from 15), 7-14
+        dual, 15-23 serve. Empty schedules raise.
         """
-        if isinstance(raw, dict):
-            schedule = {int(k): v for k, v in raw.items()}
-        elif isinstance(raw, list):
-            schedule = {i: v for i, v in enumerate(raw)}
-        else:
+        if isinstance(raw, list):
+            return {i: v for i, v in enumerate(raw)}
+        if not isinstance(raw, dict):
             raise ValueError(f"schedule must be a dict or list, got {type(raw).__name__}")
-        missing = [h for h in range(24) if h not in schedule]
-        if missing:
-            raise ValueError(f"schedule is missing hours {missing}")
+        if not raw:
+            raise ValueError("schedule is empty")
+        defined = {int(k): v for k, v in raw.items()}
+        bad = [h for h in defined if not 0 <= h <= 23]
+        if bad:
+            raise ValueError(f"schedule hours must be in 0..23, got {bad}")
+        sorted_hours = sorted(defined)
+        # wrap-around seed: hour 0 inherits from the highest defined hour
+        # if not explicitly set (cyclical day boundary).
+        last_mode = defined[sorted_hours[-1]]
+        schedule = {}
+        for h in range(24):
+            if h in defined:
+                last_mode = defined[h]
+            schedule[h] = last_mode
         return schedule
 
     # ------------------------------------------------------------------
