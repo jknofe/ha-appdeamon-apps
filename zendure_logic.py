@@ -192,14 +192,19 @@ def derive_bypass_now(outputpackpower, packstate):
 
 
 def compute_setpoint(power_con, power_sol, mode, solar_input_power, electric_level,
-                     batt_low_stop, inverter_max_power, dual_max_power, dual_solar_margin,
+                     batt_low_stop, dual_cap, serve_cap,
                      power_step, target_bias_steps,
-                     bypass_now=False, hours_since_last_bypass=999, bypass_grace_hours=4,
                      battery_discharged=False):
-    """Compute the inverter outputLimit setpoint. See SP-5..SP-11, SP-14..SP-15.
+    """Compute the inverter outputLimit setpoint. See SP-5..SP-11, SP-14.
 
-    Pipeline: raw target -> quantize -> mode cap -> bypass-grace override
-    -> battery guard -> clamp.
+    Pipeline: raw target -> quantize -> mode cap -> battery guard -> clamp.
+
+    Three caps, one per mode:
+      - charge      -> 0 (hard)
+      - dual-limit  -> quantized solar input (battery doesn't drain)
+      - dual        -> dual_cap (typically 720 W; battery drains freely)
+      - serve / *   -> serve_cap (typically 540 W; lower to limit grid export
+                       when consumption drops between 20-second ticks)
 
     The half-step bias (target_bias_steps = 0.5) shaves half a step off the
     raw target before flooring. Without it the quantizer consistently
@@ -216,35 +221,22 @@ def compute_setpoint(power_con, power_sol, mode, solar_input_power, electric_lev
     raw_target = power_con - power_sol - (power_step * target_bias_steps)
     quantized_target = (raw_target // power_step) * power_step
 
-    if mode == 'dual':
-        # SP-8: dual feeds the home from solar AND battery in parallel but
-        # capped at the panels' contribution, so we never drain the battery
-        # past what the sun is providing — that would defeat 'dual'.
-        half_solar = ((solar_input_power - dual_solar_margin) // power_step) * power_step
-        if half_solar < 0:
-            half_solar = 0
-        cap = dual_max_power
-        setpoint = min(quantized_target, half_solar, cap)
-    elif mode == 'dual-limit':
+    if mode == 'dual-limit':
         # SP-14: cap at the inverter's current solar input, quantized. Net
         # effect: output exactly matches solar production, so the battery
-        # never drains. Used in the SoC band between low_stop and
-        # dual_limit_threshold to keep topping up on bad-weather days.
-        solar_cap = (solar_input_power // power_step) * power_step
-        if solar_cap < 0:
-            solar_cap = 0
-        cap = solar_cap
-        setpoint = min(quantized_target, cap)
-        # SP-15: bypass-grace override. If we're currently in bypass OR a
-        # bypass landed within the last `bypass_grace_hours`, the battery is
-        # known full enough to drain freely — lift the cap to dual_max_power
-        # so we actually use that fresh charge instead of hoarding it.
-        if bypass_now or hours_since_last_bypass < bypass_grace_hours:
-            cap = dual_max_power
-            setpoint = min(quantized_target, cap)
+        # never drains. Active in the SoC band between low_stop and
+        # dual_limit_threshold; refine_active_mode promotes us to 'dual'
+        # once SoC reaches dual_limit_threshold and never returns this day.
+        cap = (solar_input_power // power_step) * power_step
+        if cap < 0:
+            cap = 0
+    elif mode == 'dual':
+        cap = dual_cap
     else:
-        cap = inverter_max_power
-        setpoint = quantized_target
+        # serve and any unknown-mode fallback.
+        cap = serve_cap
+
+    setpoint = min(quantized_target, cap)
 
     # SP-10 / SP-16: battery protection. The simple `level <= batt_low_stop`
     # check still fires; the optional `battery_discharged` latch (computed by

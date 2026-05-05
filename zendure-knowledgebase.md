@@ -35,15 +35,15 @@ Out of scope:
 | Q2 | MQTT publish via HA service `mqtt/publish`. | No broker creds in AppDaemon. |
 | Q3 | MQTT subscribe / decoding stays in HA YAML; AppDaemon reads `sensor.zendure_mqtt_*`. | Lowest-risk slice. |
 | Q4 | Persistent flags stay as HA entities where useful. | Visible on dashboards, restored after HA restart. |
-| Q5 | Hybrid config: device identity in `apps.yaml`; two HA helpers (`input_boolean.zendure_dry_run`, `input_number.zendure_inverter_max_power`). Other constants in `apps.yaml`. | No restart for tuning, minimal helper sprawl. |
+| Q5 | Config in `apps.yaml`; one HA helper (`input_boolean.zendure_dry_run`) for the live shadow-mode toggle. The legacy `input_number.zendure_inverter_max_power` was dropped — `dual_cap` / `serve_cap` are now in `apps.yaml`. | Helper sprawl wasn't paying off; AppDaemon hot-reloads on `apps.yaml` edits anyway. |
 | Q6 | **Shadow mode for the entire prototyping phase.** Live entities (`sensor.zendure_setpoint`, `zendure.operation_mode`) are not written; writes go to `*_shadow` companions. MQTT publishes are redirected to `shadow/<original-topic>` with the exact payload Zendure would receive — an external subscriber can diff us against the legacy `python_script` on the live topic. Cutover via `input_boolean.zendure_dry_run`. | Inverter is driven every 20 s; bug = wrong power flow. |
 | Q7 | Bypass tracker inside `ZendureStateMachine`, `listen_state` + 60 s debounce on `electriclevel==100 ∧ packstate=='idle' ∧ outputpackpower==0 ∧ solarinputpower>50`. Latches `sensor.zendure_bypass_reached_at`. | Replaces unreliable `sensor.zendure_mqtt_bypass` and the dumb HA "battery 100 % long enough" automation; keeps app count at two. |
 | Q8 | `dual` schedule slots are battery-active hours; `refine_active_mode` decides charge/dual-limit/dual at runtime based on SoC + previous mode. | Matches the production for-loop refinement. SoC-driven mode picking lets us defend a 30 % floor in bad weather without adding day-of-week / month logic. |
 | Q9 | `dual-limit` mode caps output at quantized solar input — output exactly tracks production, battery never drains. Used in the SoC band 20–29 % during dual hours. | "Reach 30 % at least" on overcast days. |
-| Q10 | Bypass-grace cap override (within `bypass_grace_hours` of last bypass, lift `dual-limit` cap to `dual_max_power`). | Don't hoard a freshly-charged battery. |
+| Q10 | Cap structure is **two values** (`dual_cap=720`, `serve_cap=540`) plus `dual-limit`'s solar-tracking cap. Dropped: `inverter_max_power_default` (390), `dual_max_power` / `dual_solar_margin` and the `half_solar` cap inside `dual`, `bypass_grace_hours` lift, and the `inverter_max_power` HA helper. | Earlier design had four caps + one helper + one bypass-grace override across modes. Once we accepted that `dual-limit` only fires at low SoC (so a bypass-grace lift is structurally unreachable) and that the inverter has a real efficient working range, two static caps cover everything. |
 | Q11 | `battery_discharged` latch with 5 % hysteresis. Once SoC ≤ `batt_low_stop`, latch sticks; only releases at `batt_low_stop + 5 %`. | A 1 % SoC bounce was flapping discharge on/off; keeping the latch flat avoids the chatter without trapping us at low SoC forever. |
 | Q12 | 174 h (7.5 d) without confirmed bypass force-overrides mode to `charge`. | Ensures weekly full-cycle in winter / multi-day overcast. |
-| Q13 | Discharge floor is **dynamic**, picked each tick by `effective_batt_low_stop`: 10 % when `bypass_now` or `hours_since_last_bypass < 10 h`, else 20 %. Functional/non-sticky equivalent of production's `zendure.batt_low_stop` writes from the state machine. | Symmetric story with `bypass_grace_hours` (cap override): freshly-charged battery is safe to drain deeper; no recent bypass means keep a 20 % reserve. Re-evaluating per tick avoids the sticky-state bookkeeping of writing/reading `zendure.batt_low_stop`. |
+| Q13 | Discharge floor is **dynamic**, picked each tick by `effective_batt_low_stop`: 10 % when `bypass_now` or `hours_since_last_bypass < 10 h`, else 20 %. Functional/non-sticky equivalent of production's `zendure.batt_low_stop` writes from the state machine. | Freshly-charged battery is safe to drain deeper; no recent bypass means keep a 20 % reserve. Re-evaluating per tick avoids the sticky-state bookkeeping of writing/reading `zendure.batt_low_stop`. |
 
 ## MQTT topics
 
@@ -91,7 +91,6 @@ In dry_run mode all publishes go to `shadow/iot/73bkTV/SE7546CU/properties/{writ
 | Helper | Purpose | Default | Range |
 | --- | --- | --- | --- |
 | `input_boolean.zendure_dry_run` | Shadow-mode kill switch. `on` = shadow, `off` = live. Default `on`. | on | on/off |
-| `input_number.zendure_inverter_max_power` | Cap on `outputLimit` outside `dual` / `dual-limit`. | 390 W | 0–1500, step 30 |
 
 If a helper is missing or `unknown`/`unavailable`, the app falls back to its `apps.yaml` default.
 
@@ -103,15 +102,13 @@ zendure_setpoint:
   class: ZendureSetpoint
   update_interval: "20s"               # parse_interval: "20s"/"20min"/"1h"/int
   mqtt_topic_write: "iot/73bkTV/SE7546CU/properties/write"
-  inverter_max_power_default: 390
-  dual_mode_max_power: 600
-  dual_mode_solar_margin: 60           # half_solar = solarInputPower − margin
+  dual_cap: 720                        # W — cap in 'dual' (battery drains freely)
+  serve_cap: 540                       # W — cap in 'serve' (lower than dual_cap so a sudden consumption drop bounds export overshoot)
   power_step: 30
   batt_low_stop_after_bypass: 10       # % — floor inside post-bypass window (drain deeper)
   batt_low_stop_default: 20            # % — floor outside post-bypass window
   low_stop_after_bypass_hours: 10      # h — within this window of last bypass use *_after_bypass
   power_target_bias_steps: 0.5         # subtract this many steps from raw target
-  bypass_grace_hours: 4                # within N h of last bypass, dual-limit cap → dual_max_power
   batt_low_stop_hysteresis_pct: 5      # latch releases only after SoC recovers by this %
 
 zendure_state_machine:
@@ -148,9 +145,9 @@ zendure_state_machine:
 6. Raw target: `power_con − power_sol − (power_step * power_target_bias_steps)`. Quantize to `power_step`.
 7. Apply mode cap:
    - `charge` → setpoint = 0.
-   - `dual` → cap = `dual_max_power` (600); also `setpoint = min(setpoint, half_solar)` where `half_solar = ((solarInputPower − dual_solar_margin) // step) * step`.
-   - `dual-limit` → cap = `(solarInputPower // step) * step`. If `bypass_now` OR `hours_since_last_bypass < bypass_grace_hours` → cap lifts to `dual_max_power`.
-   - default (`serve` / unknown) → cap = `inverter_max_power` (helper-overridable).
+   - `dual` → cap = `dual_cap` (720). Battery drains freely up to the cap.
+   - `dual-limit` → cap = `(solarInputPower // step) * step`. Output exactly tracks solar production; battery doesn't drain.
+   - default (`serve` / unknown) → cap = `serve_cap` (540).
 8. Battery protection: `electric_level ≤ batt_low_stop` OR `battery_discharged` → setpoint = 0.
 9. Clamp `0 ≤ setpoint ≤ cap`.
 10. If changed since last publish → publish MQTT `outputLimit`. Always update `sensor.zendure_setpoint` (or `*_shadow`).
@@ -199,7 +196,7 @@ A separate diagnostic sensor `sensor.zendure_bypass_active` is updated on every 
       - tools
   ```
   Without this, every push that touches a test or tool file emits a non-fatal but noisy import-error stack trace.
-- **Half-step bias and dual-mode `half_solar = solar − 60` are inherited tuning** from the production script. Port verbatim, revisit only if the soak window shows persistent unexplained divergence.
+- **Half-step bias** is inherited tuning from the production script. Port verbatim, revisit only if the soak window shows persistent unexplained divergence. (The dual-mode `half_solar = solar − 60` cap was dropped in the dual_cap/serve_cap simplification — production doesn't apply it either, and dropping it actually closes a divergence rather than opening one.)
 - **60 s debounce / 50 W solar threshold** for the bypass tracker are estimates. Verify against the next live bypass event; tune if it false-triggers or misses.
 - **`input_select.zendure_operation_mode_strategy`** (manual override: force-serve / force-charge / etc.) is reserved for a future feature. Not wired up.
 - **HA recorder `purge_keep_days = 30` (backlog).** Default is 10 days. If `sensor.zendure_bypass_reached_at` goes that long without a real bypass and HA restarts in the window, the entity can come back `unknown` and the bootstrap falls back to `now − 7 d`. Bumping to 30 days neatly closes that gap (roughly 3× DB size; consider `recorder.exclude` for the very chatty `power_consumption` / `zendure_mqtt_*` if disk pressure becomes an issue). Defer until a real bypass moment is captured first; revisit if the spurious-`charge` divergence persists.

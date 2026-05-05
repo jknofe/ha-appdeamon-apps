@@ -24,15 +24,15 @@ from zendure_logic import (
 
 class ZendureSetpoint(hass.Hass):
 
-    INVERTER_MAX_POWER_HELPER = "input_number.zendure_inverter_max_power"
-
     def initialize(self):
         # Config from apps.yaml (see knowledgebase / requirements §7)
         self.update_interval = parse_interval(self.args.get("update_interval", "20s"))
         self.mqtt_topic_write = self.args["mqtt_topic_write"]
-        self.inverter_max_power_default = self.args.get("inverter_max_power_default", 390)
-        self.dual_max_power = self.args.get("dual_mode_max_power", 600)
-        self.dual_solar_margin = self.args.get("dual_mode_solar_margin", 60)
+        # Two caps: dual_cap (battery drains freely up to this), serve_cap
+        # (lower so a sudden consumption drop between 20 s ticks bounds export).
+        # dual-limit caps at quantized solar input separately inside compute_setpoint.
+        self.dual_cap = self.args.get("dual_cap", 720)
+        self.serve_cap = self.args.get("serve_cap", 540)
         self.power_step = self.args.get("power_step", 30)
         # SP-18: production parity — discharge floor is dynamic. After a bypass
         # moment (or while bypass is live), allow draining to 10 %; outside that
@@ -41,11 +41,6 @@ class ZendureSetpoint(hass.Hass):
         self.batt_low_stop_default = self.args.get("batt_low_stop_default", 20)
         self.low_stop_after_bypass_hours = self.args.get("low_stop_after_bypass_hours", 10)
         self.power_target_bias_steps = self.args.get("power_target_bias_steps", 0.5)
-        # SP-15: hours-since-last-bypass override window for dual-limit. Within
-        # this many hours after a confirmed bypass moment, dual-limit's solar
-        # cap is lifted to dual_max_power (the freshly-charged battery is
-        # safe to drain).
-        self.bypass_grace_hours = self.args.get("bypass_grace_hours", 4)
         # SP-16: battery-discharged latch hysteresis. Once level <= batt_low_stop
         # the latch sticks until level >= batt_low_stop + hysteresis, so a 1%
         # SoC bounce can't ping-pong discharge on/off.
@@ -111,13 +106,6 @@ class ZendureSetpoint(hass.Hass):
                 self._battery_discharged = new_latched
                 self._write_battery_discharged_sensor(new_latched)
 
-            # Hybrid config: helper overrides apps.yaml default if set (CFG-7).
-            inverter_max_power = int(self._helper_or_default(
-                self.INVERTER_MAX_POWER_HELPER,
-                "inverter_max_power_default",
-                self.inverter_max_power_default,
-            ))
-
             setpoint = compute_setpoint(
                 power_con=power_con,
                 power_sol=power_sol,
@@ -125,14 +113,10 @@ class ZendureSetpoint(hass.Hass):
                 solar_input_power=solar_input_power,
                 electric_level=electric_level,
                 batt_low_stop=batt_low_stop,
-                inverter_max_power=inverter_max_power,
-                dual_max_power=self.dual_max_power,
-                dual_solar_margin=self.dual_solar_margin,
+                dual_cap=self.dual_cap,
+                serve_cap=self.serve_cap,
                 power_step=self.power_step,
                 target_bias_steps=self.power_target_bias_steps,
-                bypass_now=bypass_now,
-                hours_since_last_bypass=hours_since_last_bypass,
-                bypass_grace_hours=self.bypass_grace_hours,
                 battery_discharged=self._battery_discharged,
             )
 
@@ -253,16 +237,6 @@ class ZendureSetpoint(hass.Hass):
         if (last.tzinfo is None) != (now.tzinfo is None):
             last = last.replace(tzinfo=now.tzinfo)
         return (now - last).total_seconds() / 3600.0
-
-    def _helper_or_default(self, helper_id, yaml_key, default):
-        """Read a HA input_number helper; fall back to apps.yaml then literal."""
-        state = self.get_state(helper_id)
-        if state not in (None, "unknown", "unavailable"):
-            try:
-                return float(state)
-            except (ValueError, TypeError):
-                pass
-        return self.args.get(yaml_key, default)
 
     def _dry_run(self):
         """Default to True (safe / shadow) when the helper is missing."""

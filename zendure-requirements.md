@@ -23,9 +23,8 @@ Out of scope: decoder/battery-state stubs, the legacy `power_*.py` (covered by
 | Symbol | Meaning |
 | --- | --- |
 | `power_step` | Quantization step for setpoint, default 30 W |
-| `inverter_max_power` | Default cap on `outputLimit`, helper-overridable, default 390 W |
-| `dual_max_power` | Cap in `dual` and bypass-grace-overridden `dual-limit`, default 600 W |
-| `dual_solar_margin` | Margin subtracted from solar input in `dual`, default 60 W |
+| `dual_cap` | Cap on `outputLimit` in `dual` mode, default 720 W (battery drains freely up to this) |
+| `serve_cap` | Cap on `outputLimit` in `serve` and any unknown-mode fallback, default 540 W (kept lower than `dual_cap` so a sudden consumption drop between 20 s ticks bounds export overshoot) |
 | `batt_low_stop` | Effective SoC % below which setpoint is forced to 0. **Dynamic** per SP-18 — picked each tick from `*_after_bypass` / `*_default` based on bypass recency. |
 | `batt_low_stop_after_bypass` | Floor inside the post-bypass window, default 10 (production parity: deeper drain allowed once battery just hit full) |
 | `batt_low_stop_default` | Floor outside the post-bypass window, default 20 (preserves reserve until next charge cycle) |
@@ -37,7 +36,6 @@ Out of scope: decoder/battery-state stubs, the legacy `power_*.py` (covered by
 | `mode_pick_low_stop_pct` | SoC threshold below which a `dual` slot is refined to `charge`, default 20 |
 | `dual_limit_threshold_pct` | SoC threshold below which a `dual` slot (from non-`dual` prior) is refined to `dual-limit`, default 30 |
 | `weekly_charge_force_hours` | Hours since last bypass that force `charge` mode, default 174 (= 7.5 d) |
-| `bypass_grace_hours` | Hours after a confirmed bypass during which the `dual-limit` cap lifts to `dual_max_power`, default 4 |
 | `bypass_now` | Instantaneous bypass guess (`outputpackpower==0 ∧ packstate=='idle'`) |
 | `hours_since_last_bypass` | Now − `sensor.zendure_bypass_reached_at`, in hours |
 | `dry_run` | `input_boolean.zendure_dry_run`. With `on`, MQTT publishes go to `shadow/<topic>` and HA writes go to shadow sensors. |
@@ -79,12 +77,11 @@ Out of scope: decoder/battery-state stubs, the legacy `power_*.py` (covered by
 - **SP-5** Raw target: `power_target = power_consumption − power_solar − (power_step * power_target_bias_steps)`.
 - **SP-6** Quantize: `setpoint = (power_target // power_step) * power_step`, integer.
 - **SP-7** `mode == 'charge'` overrides setpoint to 0.
-- **SP-8** `mode == 'dual'` applies cap = `dual_max_power` AND `setpoint = min(setpoint, half_solar)` where `half_solar = ((solarinputpower − dual_solar_margin) // power_step) * power_step`. If `half_solar < 0`, treat as 0.
-- **SP-9** Other modes use cap = `inverter_max_power` (helper-overridable).
+- **SP-8** `mode == 'dual'` applies cap = `dual_cap` (default 720). Battery drains freely up to the cap; no solar-tracking constraint. Once `refine_active_mode` promotes us from `dual-limit` to `dual` (SoC ≥ `dual_limit_threshold_pct`), the anti-bounce keeps us in `dual` for the rest of the day, so this cap stays in effect through any transient SoC dips.
+- **SP-9** `mode == 'serve'` (and any unknown-mode fallback) applies cap = `serve_cap` (default 540). Lower than `dual_cap` so a sudden consumption drop between 20 s ticks bounds the export overshoot.
 - **SP-10** Battery protection: `electric_level ≤ batt_low_stop` → setpoint = 0.
 - **SP-11** Final clamp: `0 ≤ setpoint ≤ cap`.
-- **SP-14** `mode == 'dual-limit'` applies cap = `(solarinputpower // power_step) * power_step` (quantized solar input, no margin), then `setpoint = min(quantized_target, cap)`. Solar 0 / negative → cap = 0 → setpoint = 0. Output exactly tracks solar production; battery doesn't drain. Used in the SoC band between `mode_pick_low_stop_pct` and `dual_limit_threshold_pct`.
-- **SP-15** Bypass-grace cap override (in `dual-limit` only): if `bypass_now == True` OR `hours_since_last_bypass < bypass_grace_hours`, cap lifts to `dual_max_power`. Rationale: a freshly-charged battery is safe to drain.
+- **SP-14** `mode == 'dual-limit'` applies cap = `(solarinputpower // power_step) * power_step` (quantized solar input). Solar 0 / negative → cap = 0 → setpoint = 0. Output exactly tracks solar production; battery doesn't drain. Active in the SoC band between `mode_pick_low_stop_pct` and `dual_limit_threshold_pct`. No bypass-grace lift: dual-limit can't fire right after a bypass anyway (SoC would still be ≥ threshold), so the override would only ever be a no-op.
 - **SP-16** Battery-discharged latch with hysteresis (pure function `battery_discharged_latch`). Once `electric_level <= batt_low_stop`, latch sticks True. Releases only when `electric_level >= batt_low_stop + batt_low_stop_hysteresis_pct`. While latched, `compute_setpoint` forces 0 even above `batt_low_stop`. Caller maintains `self._battery_discharged` in memory, bootstraps from HA on init (accepting either `sensor.zendure_battery_discharged_shadow` or legacy `zendure.battery_discharged`), and writes `sensor.zendure_battery_discharged_shadow` (`True`/`False` string, dry_run-gated) only on flip.
 - **SP-17** Solar-input fallback. `power_sol` reads `sensor.hm_400_power`; if unavailable, falls back to `sensor.hm_400_power_fallback`. Matches the production fallback when the inverter's WiFi drops.
 - **SP-18** Dynamic discharge floor (pure function `effective_batt_low_stop`). Picked each tick: `batt_low_stop = batt_low_stop_after_bypass` (default 10) when `bypass_now` OR `hours_since_last_bypass < low_stop_after_bypass_hours` (default 10), else `batt_low_stop_default` (default 20). Mirrors production's dynamic `zendure.batt_low_stop` (10 % after a bypass to use more battery, 20 % otherwise) but re-evaluated each tick rather than persisted across mode transitions. Both `compute_setpoint` and `battery_discharged_latch` consume the effective value, so cutoff and hysteresis stay aligned.
@@ -167,13 +164,12 @@ Out of scope: decoder/battery-state stubs, the legacy `power_*.py` (covered by
 ### `apps.yaml`
 - **CFG-1** `update_interval` (parsed by `app_helpers.parse_interval`) for both apps.
 - **CFG-2** `mqtt_topic_write`, `mqtt_topic_read` for the device's MQTT topics.
-- **CFG-3** Setpoint constants: `inverter_max_power_default`, `dual_mode_max_power`, `dual_mode_solar_margin`, `power_step`, `batt_low_stop_after_bypass`, `batt_low_stop_default`, `low_stop_after_bypass_hours`, `power_target_bias_steps`, `bypass_grace_hours`, `batt_low_stop_hysteresis_pct`.
+- **CFG-3** Setpoint constants: `dual_cap`, `serve_cap`, `power_step`, `batt_low_stop_after_bypass`, `batt_low_stop_default`, `low_stop_after_bypass_hours`, `power_target_bias_steps`, `batt_low_stop_hysteresis_pct`.
 - **CFG-4** State-machine constants: `schedule` (24-slot list), `low_batt_minsoc`, `med_batt_minsoc`, `mode_pick_low_stop_pct`, `dual_limit_threshold_pct`, `weekly_charge_force_hours`.
 - **CFG-5** `bypass_tracker.debounce_seconds`, `bypass_tracker.solar_threshold_w`, `bypass_tracker.fallback_days_when_missing`.
 
 ### HA helpers
 - **CFG-6** `input_boolean.zendure_dry_run` — dry-run gate per CC-3. Default `on`.
-- **CFG-7** `input_number.zendure_inverter_max_power` — overrides `inverter_max_power_default` (non-`dual` / non-`dual-limit` modes only). Missing/`unknown` → fall back to `apps.yaml` default.
 
 ### HA host (`/config/appdaemon.yaml`)
 - **CFG-8** `appdaemon.exclude_dirs` must include `tests` and `tools`. AppDaemon's hot-reload watcher otherwise tries to import every modified `.py` under `app_dir` (including subdirectories), emitting a non-fatal but noisy stack trace whenever a test or tool file changes.
@@ -245,12 +241,12 @@ Each test references the requirement ID it covers in its name and docstring.
 
 #### `compute_setpoint` (SP-5..SP-11)
 - **TST-27** Serve mode, target with bias → quantized within cap
-- **TST-28** Serve mode, large target → clamped at `inverter_max_power`
+- **TST-28** Serve mode, large target → clamped at `serve_cap`
 - **TST-29** Serve mode, target negative → 0
 - **TST-30** Charge mode → 0 regardless of inputs
-- **TST-31** Dual mode, half_solar caps target
-- **TST-32** Dual mode, low solar → half_solar < 0 → setpoint = 0
-- **TST-33** Dual mode, large target with high solar → clamped at `dual_max_power`
+- **TST-31** Dual mode, target below cap passes through quantized
+- **TST-32** Dual mode, solar input has no effect (no half_solar restriction)
+- **TST-33** Dual mode, large target → clamped at `dual_cap`
 - **TST-34** Battery protection: `level == batt_low_stop` (≤) → 0
 - **TST-35** Battery protection: `level > batt_low_stop` → unaffected
 - **TST-36** No latch (TST-36 specifically): recovering SoC immediately allows non-zero setpoint *when `battery_discharged=False`*
@@ -270,12 +266,10 @@ Each test references the requirement ID it covers in its name and docstring.
 - **TST-46** scheduled `'dual'`, level ≥ threshold → `'dual'`
 - **TST-47** scheduled `'dual'`, level == threshold → `'dual'` (strict `<` to threshold)
 
-#### `compute_setpoint` dual-limit (SP-14, SP-15)
+#### `compute_setpoint` dual-limit (SP-14)
 - **TST-48** dual-limit caps at `(solar_input // step) * step`
 - **TST-49** dual-limit, target < solar_cap → target wins
 - **TST-50** dual-limit, solar_input == 0 → setpoint = 0
-- **TST-51** dual-limit + `bypass_now` → cap lifts to `dual_max_power`
-- **TST-52** dual-limit + `hours_since_last_bypass < bypass_grace_hours` → cap lifts; boundary `==` does not lift
 
 #### `pick_mode_payload` dual-limit (SM-19)
 - **TST-53** any → dual-limit → `(None, 'dual-limit')`

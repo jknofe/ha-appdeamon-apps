@@ -310,7 +310,7 @@ def _serve_args(**overrides):
     base = dict(
         power_con=0, power_sol=0, mode='serve', solar_input_power=0,
         electric_level=50, batt_low_stop=10,
-        inverter_max_power=390, dual_max_power=600, dual_solar_margin=60,
+        dual_cap=720, serve_cap=540,
         power_step=30, target_bias_steps=0.5,
     )
     base.update(overrides)
@@ -324,11 +324,11 @@ def test_compute_serve_quantizes_to_step_with_bias():
     assert sp == 270
 
 
-def test_compute_serve_clamps_to_inverter_max():
-    """TST-28 / SP-9,11: large target clamped at inverter_max_power=390."""
+def test_compute_serve_clamps_to_serve_cap():
+    """TST-28 / SP-9,11: large target in serve clamped at serve_cap=540."""
     sp = compute_setpoint(**_serve_args(power_con=1000))
-    # target = 1000 - 15 = 985; quantized = 960; clamped at 390
-    assert sp == 390
+    # target = 1000 - 15 = 985; quantized = 960; clamped at 540
+    assert sp == 540
 
 
 def test_compute_serve_negative_target_clamps_to_zero():
@@ -344,29 +344,25 @@ def test_compute_charge_mode_forces_zero():
     assert sp == 0
 
 
-def test_compute_dual_caps_to_half_solar():
-    """TST-31 / SP-8: dual mode with solar=300, margin=60 -> half_solar=240; caps target."""
-    # power_con=500: target=500-15=485, quantized=480; min(480, 240, 600) = 240
-    sp = compute_setpoint(**_serve_args(mode='dual', power_con=500, solar_input_power=300))
-    assert sp == 240
-    # power_con=200: target=185, quantized=180; min(180, 240, 600) = 180
-    sp = compute_setpoint(**_serve_args(mode='dual', power_con=200, solar_input_power=300))
-    assert sp == 180
+def test_compute_dual_tracks_target_below_cap():
+    """TST-31 / SP-8: dual caps at dual_cap=720; target below cap passes through quantized."""
+    # power_con=500: target=485, quantized=480; min(480, 720) = 480
+    sp = compute_setpoint(**_serve_args(mode='dual', power_con=500))
+    assert sp == 480
 
 
-def test_compute_dual_low_solar_clamps_to_zero():
-    """TST-32 / SP-8,11: dual mode with solar=50, margin=60 -> half_solar negative, setpoint=0."""
+def test_compute_dual_independent_of_solar():
+    """TST-32 / SP-8: dual no longer applies a solar-input cap; output tracks target only."""
+    # solar=50 used to make setpoint=0 via half_solar; now it doesn't matter.
     sp = compute_setpoint(**_serve_args(mode='dual', power_con=500, solar_input_power=50))
-    assert sp == 0
+    assert sp == 480
 
 
-def test_compute_dual_caps_at_dual_max_power():
-    """TST-33 / SP-8: dual mode with high target and high solar -> capped at dual_max_power=600."""
-    # power_con=1000, target=985, quantized=960
-    # solar=2000, half_solar=(2000-60)//30*30 = 1940//30*30 = 1920
-    # min(960, 1920, 600) = 600
-    sp = compute_setpoint(**_serve_args(mode='dual', power_con=1000, solar_input_power=2000))
-    assert sp == 600
+def test_compute_dual_clamps_to_dual_cap():
+    """TST-33 / SP-8: dual with target far above cap clamps at dual_cap=720."""
+    # power_con=1000, target=985, quantized=960; min(960, 720) = 720
+    sp = compute_setpoint(**_serve_args(mode='dual', power_con=1000))
+    assert sp == 720
 
 
 def test_compute_battery_protection_at_low_stop():
@@ -436,7 +432,7 @@ def test_refine_dual_at_threshold_uses_strict_less():
 
 
 # ============================================================================
-# compute_setpoint dual-limit (SP-14, SP-15) — TST-48..52
+# compute_setpoint dual-limit (SP-14) — TST-48..50
 # ============================================================================
 
 def test_compute_dual_limit_caps_at_solar_input():
@@ -458,32 +454,6 @@ def test_compute_dual_limit_zero_solar_zero_setpoint():
     """TST-50 / SP-14: solar=0 -> cap=0 -> setpoint=0 even with positive target."""
     sp = compute_setpoint(**_serve_args(mode='dual-limit', power_con=500, solar_input_power=0))
     assert sp == 0
-
-
-def test_compute_dual_limit_bypass_now_lifts_cap():
-    """TST-51 / SP-15: bypass_now=True overrides solar cap up to dual_max_power=600."""
-    # power_con=1000, target=985, quantized=960; without override capped at solar=300
-    # With override: cap = 600; min(960, 600) = 600
-    sp = compute_setpoint(**_serve_args(
-        mode='dual-limit', power_con=1000, solar_input_power=300,
-        bypass_now=True,
-    ))
-    assert sp == 600
-
-
-def test_compute_dual_limit_recent_bypass_lifts_cap():
-    """TST-52 / SP-15: hours_since_last_bypass < bypass_grace_hours lifts cap to dual_max_power."""
-    sp = compute_setpoint(**_serve_args(
-        mode='dual-limit', power_con=1000, solar_input_power=300,
-        hours_since_last_bypass=2.5, bypass_grace_hours=4,
-    ))
-    assert sp == 600
-    # Boundary: hours == grace -> override does NOT fire (strict <).
-    sp = compute_setpoint(**_serve_args(
-        mode='dual-limit', power_con=1000, solar_input_power=300,
-        hours_since_last_bypass=4, bypass_grace_hours=4,
-    ))
-    assert sp == 300
 
 
 # ============================================================================
