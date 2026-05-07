@@ -142,19 +142,26 @@ class ZendureSetpoint(hass.Hass):
         State string formatted as `repr(round(setpoint, 0))` to match the
         original python_script byte-for-byte (e.g. "30.0"), so shadow vs
         live charts compare cleanly during the verification window.
+
+        Skips the set_state call when the target entity already holds the same
+        state string. Avoids generating an HA state-changed event every 20 s
+        for a stable setpoint.
         """
         state_str = repr(round(setpoint, 0))
-        attrs = {
+        if self._dry_run():
+            target_entity = "sensor.zendure_setpoint_shadow"
+            friendly_name = "Zendure Setpoint (shadow)"
+        else:
+            target_entity = "sensor.zendure_setpoint"
+            friendly_name = "Zendure Setpoint"
+        if self.get_state(target_entity) == state_str:
+            return
+        self.set_state(target_entity, state=state_str, attributes={
             "state_class": "measurement",
             "unit_of_measurement": "W",
             "device_class": "power",
-        }
-        if self._dry_run():
-            attrs["friendly_name"] = "Zendure Setpoint (shadow)"
-            self.set_state("sensor.zendure_setpoint_shadow", state=state_str, attributes=attrs)
-        else:
-            attrs["friendly_name"] = "Zendure Setpoint"
-            self.set_state("sensor.zendure_setpoint", state=state_str, attributes=attrs)
+            "friendly_name": friendly_name,
+        })
 
     def _publish_setpoint_mqtt(self, setpoint):
         payload = {"properties": {"outputLimit": setpoint}}

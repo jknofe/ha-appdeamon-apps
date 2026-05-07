@@ -276,19 +276,20 @@ class ZendureStateMachine(hass.Hass):
 
         Shadow value is the raw mode string identical to the live entity, so
         Lovelace charts can compare them directly during the prototyping phase.
+
+        Skips the set_state call when the target entity already holds the same
+        mode. Avoids generating an HA state-changed event every 20 min when
+        the schedule keeps us in the same mode for hours.
         """
         if self._dry_run():
-            self.set_state(
-                "sensor.zendure_operation_mode_shadow",
-                state=mode,
-                attributes={"friendly_name": "Zendure Operation Mode (shadow)"},
-            )
+            target_entity = "sensor.zendure_operation_mode_shadow"
+            friendly_name = "Zendure Operation Mode (shadow)"
         else:
-            self.set_state(
-                "zendure.operation_mode",
-                state=mode,
-                attributes={"friendly_name": "Zendure Operation Mode"},
-            )
+            target_entity = "zendure.operation_mode"
+            friendly_name = "Zendure Operation Mode"
+        if self.get_state(target_entity) == mode:
+            return
+        self.set_state(target_entity, state=mode, attributes={"friendly_name": friendly_name})
 
     # ------------------------------------------------------------------
     # Helpers

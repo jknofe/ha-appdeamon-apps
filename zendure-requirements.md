@@ -89,7 +89,7 @@ Out of scope: decoder/battery-state stubs, the legacy `power_*.py` (covered by
 - **SP-18** Dynamic discharge floor (pure function `effective_batt_low_stop`). Picked each tick: `batt_low_stop = batt_low_stop_after_bypass` (default 10) when `bypass_now` OR `hours_since_last_bypass < ZendureSetpoint.POST_BYPASS_WINDOW_HOURS` (fixed 10 h), else `batt_low_stop_default` (default 20). Mirrors production's dynamic `zendure.batt_low_stop` (10 % after a bypass to use more battery, 20 % otherwise) but re-evaluated each tick rather than persisted across mode transitions. Both `compute_setpoint` and `battery_discharged_latch` consume the effective value, so cutoff and hysteresis stay aligned.
 
 ### Outputs
-- **SP-12** Setpoint written to `sensor.zendure_setpoint` (live) or `sensor.zendure_setpoint_shadow` (shadow), state formatted as `repr(round(setpoint, 0))` to match the original byte-for-byte. Attributes: `state_class: measurement`, `unit_of_measurement: W`, `device_class: power`, `friendly_name: 'Zendure Setpoint' / 'Zendure Setpoint (shadow)'`.
+- **SP-12** Setpoint written to `sensor.zendure_setpoint` (live) or `sensor.zendure_setpoint_shadow` (shadow), state formatted as `repr(round(setpoint, 0))` to match the original byte-for-byte. Attributes: `state_class: measurement`, `unit_of_measurement: W`, `device_class: power`, `friendly_name: 'Zendure Setpoint' / 'Zendure Setpoint (shadow)'`. Write is skipped when the target entity already holds the same state string — avoids generating an HA state-changed event every 20 s for a stable setpoint.
 - **SP-13** MQTT publish to `mqtt_topic_write` with `{"properties": {"outputLimit": <int>}}` only when `setpoint != setpoint_old` (in-memory tracker; bootstrapped from `sensor.zendure_setpoint` on first cycle).
 
 ## 5. `ZendureStateMachine` requirements
@@ -132,7 +132,7 @@ Out of scope: decoder/battery-state stubs, the legacy `power_*.py` (covered by
 - **SM-19** `→ dual-limit` (any prior mode) → no payload, advance. `refine_active_mode` already validated SoC; setpoint loop applies the cap (SP-14).
 
 ### Outputs
-- **SM-16** Effective mode written to `zendure.operation_mode` (live) or `sensor.zendure_operation_mode_shadow` (shadow). Shadow value is the same raw mode string for chart comparison.
+- **SM-16** Effective mode written to `zendure.operation_mode` (live) or `sensor.zendure_operation_mode_shadow` (shadow). Shadow value is the same raw mode string for chart comparison. Write is skipped when the target entity already holds the same mode — avoids per-tick HA state-changed events when the schedule keeps us in the same mode for hours.
 - **SM-17** MQTT payloads from SM-8 / SM-9 / SM-13 / SM-14 published to `mqtt_topic_write` only when non-`None`.
 
 ## 6. Bypass tracker requirements
