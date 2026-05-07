@@ -191,6 +191,21 @@ def derive_bypass_now(outputpackpower, packstate):
     return outputpackpower == 0 and packstate == 'idle'
 
 
+def derive_hm400_from_shelly(power_solargen, outputhomepower):
+    """Estimate HM-400 output as Shelly total inverter AC minus Zendure's home output. See SP-17.
+
+    Fallback path when `sensor.hm_400_power` is unavailable (OpenDTU WiFi drop).
+    Shelly 1PM measures total on-site inverter AC (HM-400 + HM-1500); Zendure's
+    `outputhomepower` is its DC feed to HM-1500, ≈ HM-1500 AC ignoring ~5%
+    inverter loss. Subtracting recovers HM-400. Clamped at 0 because momentary
+    measurement skew can push the difference slightly negative.
+
+    Replaces the legacy `zendure_solarinputpower * 0.5 * 0.95` fallback, which
+    had no physical grounding (the two solar systems are independent).
+    """
+    return max(0, power_solargen - outputhomepower)
+
+
 def compute_setpoint(power_con, power_sol, mode, solar_input_power, electric_level,
                      batt_low_stop, dual_cap, serve_cap,
                      power_step, target_bias_steps,

@@ -10,6 +10,7 @@ from zendure_logic import (
     bypass_status,
     compute_setpoint,
     derive_bypass_now,
+    derive_hm400_from_shelly,
     effective_batt_low_stop,
     force_weekly_charge,
     is_bypass_active,
@@ -592,3 +593,28 @@ def test_effective_low_stop_outside_window_returns_default():
 def test_effective_low_stop_bypass_now_overrides_stale_hours():
     """TST-70 / SP-18: bypass_now wins over a stale hours_since_last_bypass."""
     assert effective_batt_low_stop(True, 9999.0, 10, 20, 10) == 10
+
+
+# ============================================================================
+# derive_hm400_from_shelly (SP-17) — TST-71..73
+# ============================================================================
+
+def test_derive_hm400_normal_case():
+    """TST-71 / SP-17: shelly > outputhomepower -> positive difference."""
+    # 800 W at the house feed with 600 W from Zendure -> ~200 W from HM-400.
+    assert derive_hm400_from_shelly(800, 600) == 200
+
+
+def test_derive_hm400_clamps_negative_to_zero():
+    """TST-72 / SP-17: outputhomepower momentarily exceeding shelly clamps at 0.
+
+    Can happen during measurement skew (Shelly @ 1 Hz vs Zendure MQTT lag) or
+    when HM-1500 is producing while HM-400 is offline / dark. Returning a
+    negative number would corrupt the setpoint formula.
+    """
+    assert derive_hm400_from_shelly(500, 600) == 0
+
+
+def test_derive_hm400_zero_inputs():
+    """TST-73 / SP-17: night / both inverters idle -> 0."""
+    assert derive_hm400_from_shelly(0, 0) == 0

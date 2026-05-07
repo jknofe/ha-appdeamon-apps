@@ -18,6 +18,7 @@ from zendure_logic import (
     battery_discharged_latch,
     compute_setpoint,
     derive_bypass_now,
+    derive_hm400_from_shelly,
     effective_batt_low_stop,
 )
 
@@ -184,16 +185,26 @@ class ZendureSetpoint(hass.Hass):
             return default
 
     def _read_power_sol(self):
-        """SP-17: prefer sensor.hm_400_power; fall back to sensor.hm_400_power_fallback
-        when the primary is unavailable. Matches the production script's behaviour
-        when the inverter's WiFi drops."""
+        """SP-17: prefer sensor.hm_400_power; on failure derive HM-400 from the Shelly
+        1PM total minus Zendure's outputhomepower (see derive_hm400_from_shelly).
+        Falls back to 0 if neither path is available — the safe direction (slightly
+        over-commands the battery rather than letting grid import grow)."""
         primary = self.get_state("sensor.hm_400_power")
         if primary not in (None, "unknown", "unavailable"):
             try:
                 return int(float(primary))
             except (ValueError, TypeError):
                 pass
-        return self._get_state_int("sensor.hm_400_power_fallback")
+        shelly = self.get_state("sensor.power_solargen")
+        output_home = self.get_state("sensor.zendure_mqtt_outputhomepower")
+        if shelly in (None, "unknown", "unavailable"):
+            return 0
+        if output_home in (None, "unknown", "unavailable"):
+            return 0
+        try:
+            return int(derive_hm400_from_shelly(float(shelly), float(output_home)))
+        except (ValueError, TypeError):
+            return 0
 
     def _bootstrap_battery_discharged(self):
         """SP-16: restore latch state from HA across AppDaemon restarts.

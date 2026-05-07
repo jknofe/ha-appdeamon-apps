@@ -61,7 +61,9 @@ Out of scope: decoder/battery-state stubs, the legacy `power_*.py` (covered by
 ### Inputs
 - **SP-3** Reads (each tolerant of missing/unavailable):
   - `sensor.power_consumption` (int W) — produced by `PowerMeter.py`
-  - `sensor.hm_400_power` (int W) — solar inverter; falls back to `sensor.hm_400_power_fallback` if unavailable (SP-17)
+  - `sensor.hm_400_power` (int W) — solar inverter; falls back via Shelly derivation (SP-17)
+  - `sensor.power_solargen` (int W, fallback only) — written by `PowerMeter.py`; total on-site inverter AC output (HM-400 + HM-1500), used in SP-17 derivation
+  - `sensor.zendure_mqtt_outputhomepower` (int W, fallback only) — Zendure's reported home output (≈ HM-1500 AC), used in SP-17 derivation
   - `sensor.zendure_mqtt_electriclevel` (int %)
   - `sensor.zendure_mqtt_outputpackpower` (int W)
   - `sensor.zendure_mqtt_solarinputpower` (int W)
@@ -83,7 +85,7 @@ Out of scope: decoder/battery-state stubs, the legacy `power_*.py` (covered by
 - **SP-11** Final clamp: `0 ≤ setpoint ≤ cap`.
 - **SP-14** `mode == 'dual-limit'` applies cap = `(solarinputpower // power_step) * power_step` (quantized solar input). Solar 0 / negative → cap = 0 → setpoint = 0. Output exactly tracks solar production; battery doesn't drain. Active in the SoC band between `mode_pick_low_stop_pct` and `dual_limit_threshold_pct`. No bypass-grace lift: dual-limit can't fire right after a bypass anyway (SoC would still be ≥ threshold), so the override would only ever be a no-op.
 - **SP-16** Battery-discharged latch with hysteresis (pure function `battery_discharged_latch`). Once `electric_level <= batt_low_stop`, latch sticks True. Releases only when `electric_level >= batt_low_stop + batt_low_stop_hysteresis_pct`. While latched, `compute_setpoint` forces 0 even above `batt_low_stop`. Caller maintains `self._battery_discharged` in memory, bootstraps from HA on init (accepting either `sensor.zendure_battery_discharged_shadow` or legacy `zendure.battery_discharged`), and writes `sensor.zendure_battery_discharged_shadow` (`True`/`False` string, dry_run-gated) only on flip.
-- **SP-17** Solar-input fallback. `power_sol` reads `sensor.hm_400_power`; if unavailable, falls back to `sensor.hm_400_power_fallback`. Matches the production fallback when the inverter's WiFi drops.
+- **SP-17** Solar-input fallback (pure function `derive_hm400_from_shelly`). `power_sol` reads `sensor.hm_400_power` (primary). When unavailable, derives `max(0, sensor.power_solargen - sensor.zendure_mqtt_outputhomepower)`: the Shelly 1PM measures total on-site inverter AC (HM-400 + HM-1500), and `outputhomepower` is the Zendure hub's feed to HM-1500 (≈ HM-1500 AC ignoring ~5% inverter loss), so the difference recovers HM-400. Replaces the legacy `zendure_solarinputpower * 0.5 * 0.95` fallback (which had no physical grounding — the two solar systems are independent). If either Shelly or `outputhomepower` is also unavailable, returns 0 — the safe direction (slightly over-commands the battery rather than letting grid import grow).
 - **SP-18** Dynamic discharge floor (pure function `effective_batt_low_stop`). Picked each tick: `batt_low_stop = batt_low_stop_after_bypass` (default 10) when `bypass_now` OR `hours_since_last_bypass < ZendureSetpoint.POST_BYPASS_WINDOW_HOURS` (fixed 10 h), else `batt_low_stop_default` (default 20). Mirrors production's dynamic `zendure.batt_low_stop` (10 % after a bypass to use more battery, 20 % otherwise) but re-evaluated each tick rather than persisted across mode transitions. Both `compute_setpoint` and `battery_discharged_latch` consume the effective value, so cutoff and hysteresis stay aligned.
 
 ### Outputs
@@ -298,6 +300,11 @@ Each test references the requirement ID it covers in its name and docstring.
 - **TST-68** `hours == window` → default floor (strict `<` boundary)
 - **TST-69** `hours > window` → default floor
 - **TST-70** `bypass_now=True` overrides a stale `hours_since_last_bypass` → after-bypass floor
+
+#### `derive_hm400_from_shelly` (SP-17)
+- **TST-71** shelly > outputhomepower → positive difference
+- **TST-72** outputhomepower > shelly → 0 (clamped)
+- **TST-73** both 0 → 0
 
 ### Layer 2 — Shadow-mode integration on HA
 

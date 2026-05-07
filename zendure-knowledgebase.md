@@ -58,7 +58,9 @@ In dry_run mode all publishes go to `shadow/iot/73bkTV/SE7546CU/properties/{writ
 
 **Setpoint inputs**
 - `sensor.power_consumption` — produced by `PowerMeter.py`
-- `sensor.hm_400_power` — solar inverter (with `sensor.hm_400_power_fallback` if unavailable, SP-17)
+- `sensor.hm_400_power` — solar inverter; on failure derives from `max(0, sensor.power_solargen - sensor.zendure_mqtt_outputhomepower)` (SP-17)
+- `sensor.power_solargen` (fallback only) — Shelly 1PM total inverter AC output, written by `PowerMeter.py`
+- `sensor.zendure_mqtt_outputhomepower` (fallback only) — Zendure's home-output reading, ≈ HM-1500 AC
 - `sensor.zendure_mqtt_electriclevel`, `sensor.zendure_mqtt_outputpackpower`, `sensor.zendure_mqtt_solarinputpower`, `sensor.zendure_mqtt_packstate`
 - `sensor.zendure_setpoint` (previous published value, change detection only)
 - `sensor.zendure_bypass_reached_at` (own output, read for `hours_since_last_bypass`)
