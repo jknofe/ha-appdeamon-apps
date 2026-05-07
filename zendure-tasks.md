@@ -129,6 +129,13 @@ Ordered checklist. Implementation only starts after this list is agreed. Compani
 - Wire `input_select.zendure_operation_mode_strategy` into `ZendureStateMachine` for manual override (force-serve / force-charge / etc.)
 - Decide whether to promote the `dual` half-power tunables (`dual_mode_max_power`, `dual_mode_solar_margin`) and `power_target_bias_steps` from `apps.yaml` to live HA helpers
 - Re-tune bypass tracker thresholds (`debounce_seconds = 60`, `solar_threshold_w = 50`) based on observed history
+- **State-transition logging (one-line INFO per flip, no per-tick noise).** Track previous-value in memory; emit only on change. Targets:
+  - `power_sol` source flip: `power_sol fallback engaged: shelly_derived (hm_400_power unavailable, shelly=820 outputhome=610 -> 210)` / `power_sol primary restored (hm_400_power=85)` / `power_sol fallback unavailable: shelly_or_outputhomepower missing -> 0`
+  - `batt_low_stop` floor flip: `batt_low_stop floor 10 -> 20 (post-bypass window expired: hours_since=10.1)`
+  - `battery_discharged` latch flip: `battery_discharged latched (level=10 <= floor=10)` / `released (level=15 >= floor=10 + hyst=5)` (additive to today's silent set_state write — keep the entity write, add the log)
+  - Mode-transition WHY (extend existing `Mode <old> → <new>`): `Mode dual → charge (force_weekly_charge: 175 h since bypass)` / `Mode dual → dual-limit (refine: level=25 < threshold=30, old=serve)` / `Mode dual → charge (refine: level=18 <= low_stop=20)`
+  - Open: should the latch-flip log replace today's silent state-write or be additive (write entity + log)? Default to additive.
+- **Periodic state snapshot (opt-in heartbeat).** `apps.yaml` knob `state_log_interval` default `0` (disabled). Typical use: set to `15min` for a soak window, then back to `0`. One INFO line per app per interval, e.g. `state mode=dual sol=primary floor=10 latched=False setpoint=270 dry_run=on`. State-machine snapshot adds `scheduled_mode`, `refined_from`, `hours_since_bypass`. No per-tick noise even at short intervals.
 
 ## Deployment workflow (resolved)
 
