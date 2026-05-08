@@ -68,7 +68,7 @@ Out of scope: decoder/battery-state stubs, the legacy `power_*.py` (covered by
   - `sensor.zendure_mqtt_outputpackpower` (int W)
   - `sensor.zendure_mqtt_solarinputpower` (int W)
   - `sensor.zendure_mqtt_packstate` (`idle` / `charging` / `discharging`)
-  - `zendure.operation_mode` (one of `serve` / `charge` / `dual` / `dual-limit`; `unknown`/`unavailable` treated as `serve`)
+  - `zendure.operation_mode` (live) **or** `sensor.zendure_operation_mode_shadow` (dry_run) — picked based on `_dry_run()` so the two apps form a closed loop in shadow mode (one of `serve` / `charge` / `dual` / `dual-limit`; `unknown`/`unavailable` treated as `serve`)
   - `sensor.zendure_setpoint` (last published, change-detection only on first cycle)
   - `sensor.zendure_bypass_reached_at` (own output, parsed for `hours_since_last_bypass`)
 

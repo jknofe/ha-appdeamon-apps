@@ -44,6 +44,7 @@ Out of scope:
 | Q11 | `battery_discharged` latch with 5 % hysteresis. Once SoC ≤ `batt_low_stop`, latch sticks; only releases at `batt_low_stop + 5 %`. | A 1 % SoC bounce was flapping discharge on/off; keeping the latch flat avoids the chatter without trapping us at low SoC forever. |
 | Q12 | 174 h (7.5 d) without confirmed bypass force-overrides mode to `charge`. | Ensures weekly full-cycle in winter / multi-day overcast. |
 | Q13 | Discharge floor is **dynamic**, picked each tick by `effective_batt_low_stop`: 10 % when `bypass_now` or `hours_since_last_bypass < 10 h`, else 20 %. Functional/non-sticky equivalent of production's `zendure.batt_low_stop` writes from the state machine. | Freshly-charged battery is safe to drain deeper; no recent bypass means keep a 20 % reserve. Re-evaluating per tick avoids the sticky-state bookkeeping of writing/reading `zendure.batt_low_stop`. |
+| Q14 | In `dry_run`, `ZendureSetpoint` reads the **shadow** mode entity (`sensor.zendure_operation_mode_shadow`) rather than `zendure.operation_mode`. Cutover swaps it back automatically (live entity in live mode). | Without this, the shadow setpoint reacts to whatever the legacy `python_script` writes to the live mode entity — so SP-7 (`charge → 0`) never fires when our state machine wants `charge` but the legacy script still says `serve`. Real symptom seen: shadow mode `charge` while shadow setpoint computed 240–420 W in serve-mode style (history-6.csv, 2026-05-08 17:00). |
 
 ## MQTT topics
 
@@ -64,7 +65,7 @@ In dry_run mode all publishes go to `shadow/iot/73bkTV/SE7546CU/properties/{writ
 - `sensor.zendure_mqtt_electriclevel`, `sensor.zendure_mqtt_outputpackpower`, `sensor.zendure_mqtt_solarinputpower`, `sensor.zendure_mqtt_packstate`
 - `sensor.zendure_setpoint` (previous published value, change detection only)
 - `sensor.zendure_bypass_reached_at` (own output, read for `hours_since_last_bypass`)
-- `zendure.operation_mode`
+- `zendure.operation_mode` (live) **or** `sensor.zendure_operation_mode_shadow` (dry_run) — picked based on `_dry_run()` so shadow setpoint follows shadow mode rather than the legacy script's live-mode write
 
 **State-machine inputs**
 - `sensor.zendure_mqtt_electriclevel`, `sensor.zendure_mqtt_outputpackpower`, `sensor.zendure_mqtt_solarinputpower`, `sensor.zendure_mqtt_packstate`

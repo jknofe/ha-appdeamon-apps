@@ -79,7 +79,16 @@ class ZendureSetpoint(hass.Hass):
             self._is_running = True
 
             # Read inputs. CC-6: missing / unknown values fall through to defaults.
-            mode = self.get_state("zendure.operation_mode")
+            # In dry_run, read the shadow mode written by ZendureStateMachine so
+            # the two apps form a closed loop — otherwise we'd react to whatever
+            # the legacy python_script wrote to `zendure.operation_mode` and our
+            # shadow setpoint wouldn't reflect what AppDaemon would do alone.
+            mode_entity = (
+                "sensor.zendure_operation_mode_shadow"
+                if self._dry_run()
+                else "zendure.operation_mode"
+            )
+            mode = self.get_state(mode_entity)
             if mode in (None, "unknown", "unavailable"):
                 mode = "serve"
 
