@@ -10,6 +10,10 @@ zendure_state_machine:
   class: ZendureStateMachine
   # Lean: now bypass-tracker only. No periodic mode tick, no read topic.
   mqtt_topic_write: "iot/73bkTV/SE7546CU/properties/write"
+  # dry_run is config-only (no HA toggle) so it can't be flipped by accident
+  # from a dashboard. true = shadow (writes go to *_shadow and shadow/<topic>),
+  # false = live. Both apps must be set the same way.
+  dry_run: true
   bypass_tracker:
     debounce_seconds: 60               # confirm bypass after this many seconds of stable predicate
     solar_threshold_w: 50              # solar must exceed this for the predicate (strict >)
@@ -22,6 +26,7 @@ zendure_setpoint:
   class: ZendureSetpoint
   update_interval: "20s"
   mqtt_topic_write: "iot/73bkTV/SE7546CU/properties/write"
+  dry_run: true                        # see zendure_state_machine.dry_run
   max_cap: 720                         # W — single output cap (was dual_cap=720 / serve_cap=540)
   power_step: 30                       # W — quantization step
   power_target_bias_steps: 0.5         # subtract this many steps from raw target (small grid-import bias)

@@ -139,6 +139,10 @@ class ZendureSetpoint(hass.Hass):
         self.soc_promote            = a.get("soc_promote_to_free", 30)
         self.solar_threshold_w      = a.get("solar_threshold_w", 100)
         self.weekly_force_hours     = a.get("weekly_charge_force_hours", 174)
+        # dry_run is set in apps.yaml only — deliberately not a HA helper so
+        # it can't be flipped by accident from the dashboard. Default True
+        # (shadow) so a missing key is never a surprise live-write.
+        self.dry_run                = bool(a.get("dry_run", True))
 
         # In-memory state. charge_latch is bootstrapped from HA so a restart
         # mid-discharge doesn't briefly re-enable drain. free_latch is
@@ -214,7 +218,7 @@ class ZendureSetpoint(hass.Hass):
         # python_script byte-for-byte (e.g. "30.0") so shadow vs live charts
         # compare cleanly during the verification window.
         state_str = repr(round(setpoint, 0))
-        if self._dry_run():
+        if self.dry_run:
             target, friendly = "sensor.zendure_setpoint_shadow", "Zendure Setpoint (shadow)"
         else:
             target, friendly = "sensor.zendure_setpoint", "Zendure Setpoint"
@@ -228,7 +232,7 @@ class ZendureSetpoint(hass.Hass):
         })
 
     def _write_mode(self, mode):
-        if self._dry_run():
+        if self.dry_run:
             target, friendly = "sensor.zendure_operation_mode_shadow", "Zendure Operation Mode (shadow)"
         else:
             target, friendly = "zendure.operation_mode", "Zendure Operation Mode"
@@ -238,7 +242,7 @@ class ZendureSetpoint(hass.Hass):
 
     def _write_battery_discharged_sensor(self, latched):
         state_str = "True" if latched else "False"
-        if self._dry_run():
+        if self.dry_run:
             self.set_state("sensor.zendure_battery_discharged_shadow",
                            state=state_str,
                            attributes={"friendly_name": "Zendure Battery Discharged (shadow)"})
@@ -249,7 +253,7 @@ class ZendureSetpoint(hass.Hass):
 
     def _publish_outputlimit(self, setpoint):
         payload = json.dumps({"properties": {"outputLimit": setpoint}})
-        topic = f"shadow/{self.mqtt_topic_write}" if self._dry_run() else self.mqtt_topic_write
+        topic = f"shadow/{self.mqtt_topic_write}" if self.dry_run else self.mqtt_topic_write
         try:
             self.call_service("mqtt/publish", topic=topic, payload=payload)
         except Exception as e:
@@ -308,9 +312,3 @@ class ZendureSetpoint(hass.Hass):
                 continue
             return str(v).lower() in ("true", "on")
         return False
-
-    def _dry_run(self):
-        v = self.get_state("input_boolean.zendure_dry_run")
-        if v in (None, "unknown", "unavailable"):
-            return True  # safe default: shadow
-        return v == "on"

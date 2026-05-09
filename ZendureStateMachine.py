@@ -68,6 +68,8 @@ class ZendureStateMachine(hass.Hass):
         fw = a.get("firmware_init", {})
         self.init_min_soc               = fw.get("min_soc", 100)   # 10 % (Zendure stores ×10)
         self.init_pass_mode             = fw.get("pass_mode", 0)   # normal
+        # dry_run lives in apps.yaml only — see ZendureSetpoint for rationale.
+        self.dry_run                    = bool(a.get("dry_run", True))
 
         self._pending_handle = None
         self._last_bypass_status = None
@@ -201,15 +203,9 @@ class ZendureStateMachine(hass.Hass):
 
     def _publish_mqtt(self, topic, payload):
         payload_str = json.dumps(payload)
-        if self._dry_run():
+        if self.dry_run:
             topic = f"shadow/{topic}"
         try:
             self.call_service("mqtt/publish", topic=topic, payload=payload_str)
         except Exception as e:
             self.log(f"MQTT publish failed: {e}", level="ERROR")
-
-    def _dry_run(self):
-        v = self.get_state("input_boolean.zendure_dry_run")
-        if v in (None, "unknown", "unavailable"):
-            return True  # safe default: shadow
-        return v == "on"
