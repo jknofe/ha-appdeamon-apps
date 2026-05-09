@@ -117,21 +117,26 @@ class ZendureStateMachine(hass.Hass):
     # ------------------------------------------------------------------
 
     def _bootstrap_bypass_timestamp(self):
-        """BT-2: restore last bypass time from HA, or seed a fallback."""
+        """BT-2: ensure sensor.zendure_bypass_reached_at has a parseable value at boot.
+
+        Writes a fallback (now - N days) when the sensor is missing or
+        unparseable, so the dashboard materializes from t=0 and downstream
+        `_hours_since_last_bypass` reads have something to subtract from. We do
+        not cache the parsed value — every tick re-reads the sensor so updates
+        from our own bypass tracker AND from any external writer (e.g. the
+        legacy `automation.zendure_bypass_reached`) are picked up immediately.
+        """
         raw = self.get_state("sensor.zendure_bypass_reached_at")
         if raw and raw not in ("unknown", "unavailable"):
             try:
-                self._last_bypass_at = datetime.datetime.fromisoformat(raw)
+                datetime.datetime.fromisoformat(raw)
                 return
             except (ValueError, TypeError):
                 self.log(
                     f"sensor.zendure_bypass_reached_at unparseable ({raw!r}), using fallback",
                     level="WARNING",
                 )
-        # Fallback: pretend last bypass was N days ago AND write the sensor so
-        # it materializes on the dashboard from t=0 (BT-2 implementation refinement).
         fallback = self.datetime() - datetime.timedelta(days=self.fallback_days_when_missing)
-        self._last_bypass_at = fallback
         self._write_bypass_sensor(fallback)
         self.log(
             f"sensor.zendure_bypass_reached_at missing — seeded {fallback.isoformat()}",
@@ -198,7 +203,6 @@ class ZendureStateMachine(hass.Hass):
         self._bypass_pending_handle = None
         if self._evaluate_bypass_predicate():
             now = self.datetime()
-            self._last_bypass_at = now
             self._write_bypass_sensor(now)
             self.log(f"Bypass reached at {now.isoformat()}")
 
@@ -209,7 +213,17 @@ class ZendureStateMachine(hass.Hass):
     def _tick(self, kwargs):
         try:
             now = self.datetime()
-            old_mode = self.get_state("zendure.operation_mode")
+            # In dry_run, read the shadow mode written by us so the state
+            # machine forms a closed loop with itself (mirrors the Q14 fix on
+            # the setpoint side). Otherwise old_mode would be whatever the
+            # legacy python_script wrote to the live entity, and every tick
+            # we'd log a spurious 'Mode <legacy_mode> -> <our_mode>' transition.
+            mode_entity = (
+                "sensor.zendure_operation_mode_shadow"
+                if self._dry_run()
+                else "zendure.operation_mode"
+            )
+            old_mode = self.get_state(mode_entity)
             scheduled_mode = pick_operation_mode(now.hour, self.schedule)
             # SM-18: refine 'dual' to charge/dual-limit/dual based on SoC.
             electric_level = self._get_state_int("sensor.zendure_mqtt_electriclevel")
@@ -221,7 +235,11 @@ class ZendureStateMachine(hass.Hass):
                 self.dual_limit_threshold_pct,
             )
             # SM-20: hard override — too long since last bypass forces charge.
-            hours_since = (now - self._last_bypass_at).total_seconds() / 3600.0
+            # Read the sensor each tick (not a cached value) so external
+            # writers (legacy automation, our own bypass tracker) are picked
+            # up immediately. Caching from boot once caused this app to ride
+            # on a stale fallback timestamp forever (history-8 / Q15).
+            hours_since = self._hours_since_last_bypass()
             new_mode = force_weekly_charge(
                 new_mode, hours_since, self.weekly_charge_force_hours
             )
@@ -254,7 +272,10 @@ class ZendureStateMachine(hass.Hass):
 
     def _tick_send_payload(self, old_mode, new_mode):
         bypass_now = self._evaluate_bypass_predicate()
-        days = (self.datetime() - self._last_bypass_at).days
+        # Same sensor-read-each-tick discipline as _tick; convert the same
+        # hours figure to integer days for pick_mode_payload's SM-9 / SM-11
+        # 'days < 7' guards.
+        days = int(self._hours_since_last_bypass() // 24)
         electric_level = self._get_state_int("sensor.zendure_mqtt_electriclevel")
         payload, effective_mode = pick_mode_payload(
             old_mode,
@@ -303,6 +324,33 @@ class ZendureStateMachine(hass.Hass):
             return int(float(val))
         except (ValueError, TypeError):
             return default
+
+    def _hours_since_last_bypass(self):
+        """Read sensor.zendure_bypass_reached_at and return hours-since-now.
+
+        Mirrors ZendureSetpoint's helper so both apps re-read each tick and
+        share the same TZ-mismatch tolerance: AppDaemon's `self.datetime()`
+        is aware iff `time_zone:` is set in `/config/appdaemon.yaml`, but the
+        sensor string may be stored naive (e.g. by HA's recorder normalizing
+        a `device_class: timestamp` state). When awareness disagrees we coerce
+        the parsed value to match `now`'s tzinfo so the subtraction works.
+
+        On any error we return a safely-large value so `force_weekly_charge`
+        doesn't fire spuriously — opposite of the boot-time fallback
+        behaviour, which deliberately uses a stale-ish timestamp to ENSURE a
+        weekly charge fires if no real bypass has been detected.
+        """
+        raw = self.get_state("sensor.zendure_bypass_reached_at")
+        if raw in (None, "unknown", "unavailable"):
+            return 999.0
+        try:
+            last = datetime.datetime.fromisoformat(raw)
+        except (ValueError, TypeError):
+            return 999.0
+        now = self.datetime()
+        if (last.tzinfo is None) != (now.tzinfo is None):
+            last = last.replace(tzinfo=now.tzinfo)
+        return (now - last).total_seconds() / 3600.0
 
     def _dry_run(self):
         """Default to True (safe / shadow) when the helper is missing."""

@@ -102,8 +102,8 @@ Out of scope: decoder/battery-state stubs, the legacy `power_*.py` (covered by
 - **SM-3** Reads (each tolerant of missing/unavailable):
   - `sensor.zendure_mqtt_electriclevel`, `sensor.zendure_mqtt_outputpackpower`, `sensor.zendure_mqtt_solarinputpower`, `sensor.zendure_mqtt_packstate`
   - `sensor.zendure_mqtt_bypass` (Zendure's reported `pass` flag — for the BT-7 diagnostic)
-  - `zendure.operation_mode` (current mode)
-  - `sensor.zendure_bypass_reached_at` (own output, for `days_since_last_bypass` and `hours_since_last_bypass`)
+  - `zendure.operation_mode` (live) **or** `sensor.zendure_operation_mode_shadow` (dry_run) — picked based on `_dry_run()` so the state machine reads back its own decisions in shadow rather than the legacy script's writes
+  - `sensor.zendure_bypass_reached_at` — re-read each tick (not cached at boot) so external writers (legacy automation, our own bypass tracker) are picked up immediately. Drives both `days_since_last_bypass` and `hours_since_last_bypass`. Helper `_hours_since_last_bypass` mirrors `ZendureSetpoint`'s including the TZ-mismatch coercion.
 
 ### Schedule (pure functions `pick_operation_mode`, `refine_active_mode`, `force_weekly_charge`)
 - **SM-4** Static 24-slot list from `apps.yaml`. Default: hours 0–5 → `serve`, 6–14 → `dual` (battery-active window), 15–23 → `serve`.
@@ -139,7 +139,7 @@ Out of scope: decoder/battery-state stubs, the legacy `power_*.py` (covered by
 
 ### Setup
 - **BT-1** Hosted inside `ZendureStateMachine.initialize()`.
-- **BT-2** Bootstrap: read `sensor.zendure_bypass_reached_at`. If parseable ISO timestamp → set `self._last_bypass_at`. If missing/`unknown`/`unavailable`/unparseable → fall back to `self.datetime() − fallback_days_when_missing` AND immediately `set_state(...)` so the sensor materializes from t=0.
+- **BT-2** Bootstrap: read `sensor.zendure_bypass_reached_at`. If parseable ISO timestamp → no-op (the sensor itself is the source of truth, re-read each tick by `_hours_since_last_bypass`). If missing/`unknown`/`unavailable`/unparseable → write `self.datetime() − fallback_days_when_missing` to the sensor so it materializes from t=0 and downstream calculations have something to subtract from.
 - **BT-3** All timestamp writes use `self.datetime().isoformat()` with attributes `{'device_class': 'timestamp', 'friendly_name': 'Zendure Bypass Reached At'}`.
 
 ### Detection (pure function `is_bypass_active`)
@@ -150,7 +150,7 @@ Out of scope: decoder/battery-state stubs, the legacy `power_*.py` (covered by
   - Re-evaluate predicate.
   - If True and no debounce timer pending → `self._pending_bypass_handle = self.run_in(_confirm_bypass, debounce_seconds)`.
   - If False and timer pending → `cancel_timer`, clear handle.
-- **BT-6** `_confirm_bypass`: re-evaluate. If still True → set `self._last_bypass_at = self.datetime()` AND `set_state("sensor.zendure_bypass_reached_at", ...)`. Clear handle.
+- **BT-6** `_confirm_bypass`: re-evaluate. If still True → `set_state("sensor.zendure_bypass_reached_at", ...)`. Clear handle. (No in-memory cache; the next tick re-reads the sensor.)
 
 ### Diagnostic status sensor
 - **BT-7** Maintain `sensor.zendure_bypass_active`, computed by pure function `bypass_status(app_active, zendure_active)`:

@@ -45,6 +45,7 @@ Out of scope:
 | Q12 | 174 h (7.5 d) without confirmed bypass force-overrides mode to `charge`. | Ensures weekly full-cycle in winter / multi-day overcast. |
 | Q13 | Discharge floor is **dynamic**, picked each tick by `effective_batt_low_stop`: 10 % when `bypass_now` or `hours_since_last_bypass < 10 h`, else 20 %. Functional/non-sticky equivalent of production's `zendure.batt_low_stop` writes from the state machine. | Freshly-charged battery is safe to drain deeper; no recent bypass means keep a 20 % reserve. Re-evaluating per tick avoids the sticky-state bookkeeping of writing/reading `zendure.batt_low_stop`. |
 | Q14 | In `dry_run`, `ZendureSetpoint` reads the **shadow** mode entity (`sensor.zendure_operation_mode_shadow`) rather than `zendure.operation_mode`. Cutover swaps it back automatically (live entity in live mode). | Without this, the shadow setpoint reacts to whatever the legacy `python_script` writes to the live mode entity — so SP-7 (`charge → 0`) never fires when our state machine wants `charge` but the legacy script still says `serve`. Real symptom seen: shadow mode `charge` while shadow setpoint computed 240–420 W in serve-mode style (history-6.csv, 2026-05-08 17:00). |
+| Q15 | `ZendureStateMachine` re-reads `sensor.zendure_bypass_reached_at` each tick rather than caching it at boot. Helper `_hours_since_last_bypass` mirrors the setpoint side, including TZ-mismatch coercion. Same dry_run / live mode-entity selection as Q14 applies to `old_mode`. | Original code parsed the sensor once into `self._last_bypass_at` at bootstrap. If the sensor was missing at boot, the bootstrap fallback set the cache to `now − 7 d`; ~7 h later `force_weekly_charge` (174 h threshold) fired and **kept firing every tick forever** because nothing updated the cache. The legacy `automation.zendure_bypass_reached` later wrote a fresh timestamp to the sensor, but the state machine never noticed. Real symptom: 100+ consecutive `Mode <X> -> charge` log lines spanning 32 h (a0d7b954_appdaemon_2026-05-09T04-23-03.114Z.log). The repeated *log line* per tick is a separate Q14-style bug — `old_mode` was read from the live entity (legacy says `serve`) while we wrote `charge` to the shadow, so the apparent transition never settled. |
 
 ## MQTT topics
 
@@ -70,8 +71,8 @@ In dry_run mode all publishes go to `shadow/iot/73bkTV/SE7546CU/properties/{writ
 **State-machine inputs**
 - `sensor.zendure_mqtt_electriclevel`, `sensor.zendure_mqtt_outputpackpower`, `sensor.zendure_mqtt_solarinputpower`, `sensor.zendure_mqtt_packstate`
 - `sensor.zendure_mqtt_bypass` (Zendure's reported `pass` flag — feeds the BT-7 diagnostic)
-- `sensor.zendure_bypass_reached_at` (own output, read for `hours_since_last_bypass` and `days_since_last_bypass`)
-- `zendure.operation_mode`
+- `sensor.zendure_bypass_reached_at` — re-read each tick (Q15) for `hours_since_last_bypass` and `days_since_last_bypass`
+- `zendure.operation_mode` (live) **or** `sensor.zendure_operation_mode_shadow` (dry_run) — picked based on `_dry_run()` so old_mode reflects our own decisions in shadow rather than the legacy script's writes
 
 ## HA entities written
 
