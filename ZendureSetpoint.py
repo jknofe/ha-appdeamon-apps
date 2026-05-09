@@ -1,12 +1,23 @@
-"""Zendure SolarFlow output-setpoint controller (every 20 s).
+"""Zendure SolarFlow controller — picks mode + computes outputLimit (every 20 s).
 
-Replaces python_script.zendure_setpoint. Reads consumption / solar / battery
-state, calls compute_setpoint, publishes MQTT only on change.
+Lean rewrite. Goal: maximize self-consumption of solar — only what the home
+cannot use right now is stored in the battery.
 
-Pure decision logic lives in zendure_logic.py; this file is the AppDaemon
-glue: read HA state, call the pure function, write HA state, publish MQTT.
+The control law is one equation:
 
-See zendure-requirements.md section 4 for the contract.
+    outputLimit = max(0, consumption - HM400_output)
+
+Everything else in this file is the protective scaffolding around it:
+  - SoC floor (10 % within 10 h of bypass, 20 % otherwise) so we don't drain to 0
+  - Charge latch with 5 % hysteresis so a 1 % SoC bounce doesn't flap discharge
+  - Three modes that pick a cap on outputLimit:
+      'charge'      → 0           (battery only charges; solar to home via HM-1500 stops)
+      'solar-only'  → solar_input (mid-SoC daylight; battery preserved, surplus charges)
+      'free'        → max_cap     (battery drains as needed; surplus solar still charges)
+  - Weekly force-charge so the battery hits 100 % at least every 7.5 days
+
+The state-machine app is now bypass-tracker-only; mode lives here so the
+20-s tick re-derives it from current state without a separate cadence.
 """
 import datetime
 import json
@@ -14,181 +25,238 @@ import json
 import appdaemon.plugins.hass.hassapi as hass
 
 from app_helpers import parse_interval
-from zendure_logic import (
-    battery_discharged_latch,
-    compute_setpoint,
-    derive_bypass_now,
-    derive_hm400_from_shelly,
-    effective_batt_low_stop,
-)
 
+
+MODE_CHARGE     = 'charge'
+MODE_SOLAR_ONLY = 'solar-only'
+MODE_FREE       = 'free'
+
+
+# ----------------------------------------------------------------------
+# Pure functions — no AppDaemon, no I/O. Testable in isolation.
+# ----------------------------------------------------------------------
+
+def effective_floor(hours_since_bypass, after_bypass_pct, default_pct, window_hours):
+    """SoC floor below which we stop discharging. Drops to `after_bypass_pct`
+    inside the post-bypass window so we can use just-charged energy more
+    deeply, then back to `default_pct` outside it."""
+    if hours_since_bypass < window_hours:
+        return after_bypass_pct
+    return default_pct
+
+
+def update_charge_latch(soc, floor, hysteresis_pct, was_latched):
+    """Latch with hysteresis on the charge trigger. Engages at SoC ≤ floor,
+    releases at SoC ≥ floor + hysteresis. Without it a 1 % SoC bounce flaps
+    discharge on/off at the boundary."""
+    if was_latched:
+        return soc < floor + hysteresis_pct
+    return soc <= floor
+
+
+def pick_mode(soc, solar_input, hours_since_bypass,
+              charge_latched, free_latched_in,
+              soc_promote, solar_threshold, weekly_force_hours):
+    """Returns (mode, free_latched_out).
+
+    Decision order:
+      1. weekly force-charge (battery health) → 'charge'
+      2. charge latch engaged                → 'charge'
+      3. SoC has reached promote threshold OR free_latch already on → 'free'
+      4. real daylight + mid-SoC → 'solar-only' (conserve battery, charge from sun)
+      5. otherwise → 'free' (mid-SoC at night: battery is the only buffer)
+
+    The free_latch is the daily drain commitment: once SoC has reached
+    soc_promote at least once, we stay in 'free' until charge mode resets it.
+    Prevents a transient mid-day SoC dip from yanking us back to solar-only
+    and stranding stored energy.
+    """
+    if hours_since_bypass >= weekly_force_hours:
+        return (MODE_CHARGE, False)
+    if charge_latched:
+        return (MODE_CHARGE, False)
+    free_latched_out = free_latched_in or (soc >= soc_promote)
+    if free_latched_out:
+        return (MODE_FREE, True)
+    if solar_input > solar_threshold:
+        return (MODE_SOLAR_ONLY, False)
+    return (MODE_FREE, False)
+
+
+def compute_setpoint(consumption, hm400, solar_input, mode,
+                     max_cap, power_step, bias_steps):
+    """Pipeline: target → quantize → mode cap → clamp.
+
+    Half-step bias shifts the floor-quantize result down by half a step so
+    we err on slight under-supply (small grid import) instead of slight
+    over-supply (small grid export).
+    """
+    if mode == MODE_CHARGE:
+        return 0
+    raw_target = consumption - hm400 - (power_step * bias_steps)
+    quantized = (raw_target // power_step) * power_step
+    if mode == MODE_SOLAR_ONLY:
+        cap = (solar_input // power_step) * power_step
+        if cap < 0:
+            cap = 0
+    else:
+        cap = max_cap
+    setpoint = min(quantized, cap)
+    if setpoint < 0:
+        setpoint = 0
+    if setpoint > cap:
+        setpoint = cap
+    return int(setpoint)
+
+
+def derive_hm400_from_shelly(power_solargen, outputhomepower):
+    """Fallback when sensor.hm_400_power is unavailable (OpenDTU WiFi drop).
+    Shelly 1PM sees total inverter AC (HM-400 + HM-1500); Zendure's
+    outputhomepower is its DC feed to HM-1500 (≈ HM-1500 AC). The
+    difference recovers HM-400. Clamped at 0 because measurement skew can
+    push the difference slightly negative."""
+    return max(0, power_solargen - outputhomepower)
+
+
+# ----------------------------------------------------------------------
+# AppDaemon glue
+# ----------------------------------------------------------------------
 
 class ZendureSetpoint(hass.Hass):
 
-    # SP-18: hours-since-last-bypass window during which the discharge floor
-    # uses *_after_bypass (deeper drain). Constant, not config — production
-    # also hard-codes 10 h here.
     POST_BYPASS_WINDOW_HOURS = 10
+    LATCH_HYSTERESIS_PCT = 5
 
     def initialize(self):
-        # Config from apps.yaml (see knowledgebase / requirements §7)
-        self.update_interval = parse_interval(self.args.get("update_interval", "20s"))
-        self.mqtt_topic_write = self.args["mqtt_topic_write"]
-        # Two caps: dual_cap (battery drains freely up to this), serve_cap
-        # (lower so a sudden consumption drop between 20 s ticks bounds export).
-        # dual-limit caps at quantized solar input separately inside compute_setpoint.
-        self.dual_cap = self.args.get("dual_cap", 720)
-        self.serve_cap = self.args.get("serve_cap", 540)
-        self.power_step = self.args.get("power_step", 30)
-        # SP-18: production parity — discharge floor is dynamic. After a bypass
-        # moment (or while bypass is live, or within POST_BYPASS_WINDOW_HOURS
-        # of one), allow draining to 10 %; outside that window, hold 20 % so
-        # the battery keeps a reserve until next charge.
-        self.batt_low_stop_after_bypass = self.args.get("batt_low_stop_after_bypass", 10)
-        self.batt_low_stop_default = self.args.get("batt_low_stop_default", 20)
-        self.power_target_bias_steps = self.args.get("power_target_bias_steps", 0.5)
-        # SP-16: battery-discharged latch hysteresis. Once level <= batt_low_stop
-        # the latch sticks until level >= batt_low_stop + hysteresis, so a 1%
-        # SoC bounce can't ping-pong discharge on/off.
-        self.batt_low_stop_hysteresis_pct = self.args.get("batt_low_stop_hysteresis_pct", 5)
-        # In-memory latch; bootstrap from HA so we don't drop a latched
-        # state across an AppDaemon restart.
-        self._battery_discharged = self._bootstrap_battery_discharged()
+        a = self.args
+        self.update_interval        = parse_interval(a.get("update_interval", "20s"))
+        self.mqtt_topic_write       = a["mqtt_topic_write"]
+        self.max_cap                = a.get("max_cap", 720)
+        self.power_step             = a.get("power_step", 30)
+        self.bias_steps             = a.get("power_target_bias_steps", 0.5)
+        self.floor_after_bypass     = a.get("batt_floor_after_bypass", 10)
+        self.floor_default          = a.get("batt_floor_default", 20)
+        self.soc_promote            = a.get("soc_promote_to_free", 30)
+        self.solar_threshold_w      = a.get("solar_threshold_w", 100)
+        self.weekly_force_hours     = a.get("weekly_charge_force_hours", 174)
 
+        # In-memory state. charge_latch is bootstrapped from HA so a restart
+        # mid-discharge doesn't briefly re-enable drain. free_latch is
+        # always re-derived from the next tick (one tick of slack is fine).
+        self._charge_latch = self._bootstrap_charge_latch()
+        self._free_latch = False
+        self._setpoint_old = self._get_state_int("sensor.zendure_setpoint", default=None)
+        self._mode_old = None
         self._is_running = False
 
-        # PS-2: bootstrap setpoint_old from the live HA value once, so the
-        # first cycle's change-detect knows what we last published. None on
-        # cold-start forces a publish on the first computed setpoint.
-        self._setpoint_old = self._get_state_int("sensor.zendure_setpoint", default=None)
-
-        # First tick fires at start + update_interval (20 s by default). No
-        # kickoff: 20 s is short enough not to matter, and letting the state
-        # machine's own kickoff write zendure.operation_mode first means our
-        # first setpoint tick reads a fresh mode rather than a cold-start
-        # 'serve' default.
         self.run_every(self._tick, "now", self.update_interval)
         self.log("ZendureSetpoint started")
 
     def _tick(self, kwargs):
-        # CC-5: in-flight reentry guard, mirroring PowerMeter.py.
         if self._is_running:
-            self.log("Tick already running, skipping")
             return
         try:
             self._is_running = True
 
-            # Read inputs. CC-6: missing / unknown values fall through to defaults.
-            # In dry_run, read the shadow mode written by ZendureStateMachine so
-            # the two apps form a closed loop — otherwise we'd react to whatever
-            # the legacy python_script wrote to `zendure.operation_mode` and our
-            # shadow setpoint wouldn't reflect what AppDaemon would do alone.
-            mode_entity = (
-                "sensor.zendure_operation_mode_shadow"
-                if self._dry_run()
-                else "zendure.operation_mode"
-            )
-            mode = self.get_state(mode_entity)
-            if mode in (None, "unknown", "unavailable"):
-                mode = "serve"
+            soc                 = self._get_state_int("sensor.zendure_mqtt_electriclevel")
+            consumption         = self._get_state_int("sensor.power_consumption")
+            hm400               = self._read_hm400_with_fallback()
+            solar_input         = self._get_state_int("sensor.zendure_mqtt_solarinputpower")
+            hours_since_bypass  = self._hours_since_last_bypass()
 
-            power_con = self._get_state_int("sensor.power_consumption")
-            power_sol = self._read_power_sol()
-            solar_input_power = self._get_state_int("sensor.zendure_mqtt_solarinputpower")
-            electric_level = self._get_state_int("sensor.zendure_mqtt_electriclevel")
-            outputpackpower = self._get_state_int("sensor.zendure_mqtt_outputpackpower")
-            packstate = self.get_state("sensor.zendure_mqtt_packstate") or ""
-            bypass_now = derive_bypass_now(outputpackpower, packstate)
-            hours_since_last_bypass = self._hours_since_last_bypass()
-
-            # SP-18: pick the active floor (10 % inside the post-bypass window,
-            # 20 % outside). Used by both the latch and compute_setpoint so the
-            # cutoff and the latch hysteresis stay aligned.
-            batt_low_stop = effective_batt_low_stop(
-                bypass_now, hours_since_last_bypass,
-                self.batt_low_stop_after_bypass, self.batt_low_stop_default,
+            floor = effective_floor(
+                hours_since_bypass,
+                self.floor_after_bypass, self.floor_default,
                 self.POST_BYPASS_WINDOW_HOURS,
             )
 
-            # SP-16: update the discharge latch BEFORE computing setpoint, so a
-            # fresh transition takes effect this tick. set_state only when the
-            # bool flips to keep HA history clean.
-            new_latched = battery_discharged_latch(
-                electric_level, batt_low_stop,
-                self.batt_low_stop_hysteresis_pct, self._battery_discharged,
+            new_charge_latch = update_charge_latch(
+                soc, floor, self.LATCH_HYSTERESIS_PCT, self._charge_latch,
             )
-            if new_latched != self._battery_discharged:
-                self._battery_discharged = new_latched
-                self._write_battery_discharged_sensor(new_latched)
+            if new_charge_latch != self._charge_latch:
+                self._charge_latch = new_charge_latch
+                self._write_battery_discharged_sensor(new_charge_latch)
+                if new_charge_latch:
+                    # Hitting the floor resets the daily drain commitment.
+                    self._free_latch = False
+
+            mode, self._free_latch = pick_mode(
+                soc, solar_input, hours_since_bypass,
+                self._charge_latch, self._free_latch,
+                self.soc_promote, self.solar_threshold_w, self.weekly_force_hours,
+            )
 
             setpoint = compute_setpoint(
-                power_con=power_con,
-                power_sol=power_sol,
-                mode=mode,
-                solar_input_power=solar_input_power,
-                electric_level=electric_level,
-                batt_low_stop=batt_low_stop,
-                dual_cap=self.dual_cap,
-                serve_cap=self.serve_cap,
-                power_step=self.power_step,
-                target_bias_steps=self.power_target_bias_steps,
-                battery_discharged=self._battery_discharged,
+                consumption, hm400, solar_input, mode,
+                self.max_cap, self.power_step, self.bias_steps,
             )
 
             self._write_setpoint(setpoint)
-            # SP-13: publish MQTT only on a real change.
+            self._write_mode(mode)
+            if mode != self._mode_old:
+                if self._mode_old is not None:
+                    self.log(f"Mode {self._mode_old} -> {mode}")
+                self._mode_old = mode
             if self._setpoint_old != setpoint:
-                self._publish_setpoint_mqtt(setpoint)
+                self._publish_outputlimit(setpoint)
                 self._setpoint_old = setpoint
         except Exception as e:
             self.log(f"Error in _tick: {e}", level="ERROR")
         finally:
             self._is_running = False
 
+    # ------------------------------------------------------------------
+    # HA writes (shadow-aware)
+    # ------------------------------------------------------------------
+
     def _write_setpoint(self, setpoint):
-        """Shadow write under dry_run, otherwise the live sensor.
-
-        State string formatted as `repr(round(setpoint, 0))` to match the
-        original python_script byte-for-byte (e.g. "30.0"), so shadow vs
-        live charts compare cleanly during the verification window.
-
-        Skips the set_state call when the target entity already holds the same
-        state string. Avoids generating an HA state-changed event every 20 s
-        for a stable setpoint.
-        """
+        # State string formatted as repr(round(x, 0)) to match the legacy
+        # python_script byte-for-byte (e.g. "30.0") so shadow vs live charts
+        # compare cleanly during the verification window.
         state_str = repr(round(setpoint, 0))
         if self._dry_run():
-            target_entity = "sensor.zendure_setpoint_shadow"
-            friendly_name = "Zendure Setpoint (shadow)"
+            target, friendly = "sensor.zendure_setpoint_shadow", "Zendure Setpoint (shadow)"
         else:
-            target_entity = "sensor.zendure_setpoint"
-            friendly_name = "Zendure Setpoint"
-        if self.get_state(target_entity) == state_str:
+            target, friendly = "sensor.zendure_setpoint", "Zendure Setpoint"
+        if self.get_state(target) == state_str:
             return
-        self.set_state(target_entity, state=state_str, attributes={
+        self.set_state(target, state=state_str, attributes={
             "state_class": "measurement",
             "unit_of_measurement": "W",
             "device_class": "power",
-            "friendly_name": friendly_name,
+            "friendly_name": friendly,
         })
 
-    def _publish_setpoint_mqtt(self, setpoint):
-        payload = {"properties": {"outputLimit": setpoint}}
-        payload_str = json.dumps(payload)
-        # In dry_run, redirect to a shadow-prefixed topic with the same payload
-        # so an external subscriber can diff our proposed setpoints against the
-        # live python_script's writes on the real topic.
+    def _write_mode(self, mode):
+        if self._dry_run():
+            target, friendly = "sensor.zendure_operation_mode_shadow", "Zendure Operation Mode (shadow)"
+        else:
+            target, friendly = "zendure.operation_mode", "Zendure Operation Mode"
+        if self.get_state(target) == mode:
+            return
+        self.set_state(target, state=mode, attributes={"friendly_name": friendly})
+
+    def _write_battery_discharged_sensor(self, latched):
+        state_str = "True" if latched else "False"
+        if self._dry_run():
+            self.set_state("sensor.zendure_battery_discharged_shadow",
+                           state=state_str,
+                           attributes={"friendly_name": "Zendure Battery Discharged (shadow)"})
+        else:
+            self.set_state("sensor.zendure_battery_discharged",
+                           state=state_str,
+                           attributes={"friendly_name": "Zendure Battery Discharged"})
+
+    def _publish_outputlimit(self, setpoint):
+        payload = json.dumps({"properties": {"outputLimit": setpoint}})
         topic = f"shadow/{self.mqtt_topic_write}" if self._dry_run() else self.mqtt_topic_write
         try:
-            self.call_service(
-                "mqtt/publish", topic=topic, payload=payload_str
-            )
+            self.call_service("mqtt/publish", topic=topic, payload=payload)
         except Exception as e:
             self.log(f"MQTT publish failed: {e}", level="ERROR")
 
     # ------------------------------------------------------------------
-    # Helpers (mirror ZendureStateMachine; kept inline rather than factored
-    # to keep each app file self-contained and match PowerMeter.py style)
+    # HA reads
     # ------------------------------------------------------------------
 
     def _get_state_int(self, entity_id, default=0):
@@ -200,11 +268,7 @@ class ZendureSetpoint(hass.Hass):
         except (ValueError, TypeError):
             return default
 
-    def _read_power_sol(self):
-        """SP-17: prefer sensor.hm_400_power; on failure derive HM-400 from the Shelly
-        1PM total minus Zendure's outputhomepower (see derive_hm400_from_shelly).
-        Falls back to 0 if neither path is available — the safe direction (slightly
-        over-commands the battery rather than letting grid import grow)."""
+    def _read_hm400_with_fallback(self):
         primary = self.get_state("sensor.hm_400_power")
         if primary not in (None, "unknown", "unavailable"):
             try:
@@ -212,50 +276,18 @@ class ZendureSetpoint(hass.Hass):
             except (ValueError, TypeError):
                 pass
         shelly = self.get_state("sensor.power_solargen")
-        output_home = self.get_state("sensor.zendure_mqtt_outputhomepower")
-        if shelly in (None, "unknown", "unavailable"):
-            return 0
-        if output_home in (None, "unknown", "unavailable"):
+        zendure_home = self.get_state("sensor.zendure_mqtt_outputhomepower")
+        if shelly in (None, "unknown", "unavailable") or zendure_home in (None, "unknown", "unavailable"):
             return 0
         try:
-            return int(derive_hm400_from_shelly(float(shelly), float(output_home)))
+            return int(derive_hm400_from_shelly(float(shelly), float(zendure_home)))
         except (ValueError, TypeError):
             return 0
 
-    def _bootstrap_battery_discharged(self):
-        """SP-16: restore latch state from HA across AppDaemon restarts.
-
-        We accept either our shadow sensor or the legacy `zendure.battery_discharged`
-        entity (string 'True'/'False' per the production script's format). Default
-        to False if neither exists.
-        """
-        for entity in ("sensor.zendure_battery_discharged_shadow",
-                       "zendure.battery_discharged"):
-            state = self.get_state(entity)
-            if state in (None, "unknown", "unavailable"):
-                continue
-            return str(state).lower() in ("true", "on")
-        return False
-
-    def _write_battery_discharged_sensor(self, latched):
-        state_str = "True" if latched else "False"
-        attrs = {"friendly_name": "Zendure Battery Discharged (shadow)"}
-        if self._dry_run():
-            self.set_state("sensor.zendure_battery_discharged_shadow",
-                           state=state_str, attributes=attrs)
-        else:
-            attrs["friendly_name"] = "Zendure Battery Discharged"
-            self.set_state("sensor.zendure_battery_discharged",
-                           state=state_str, attributes=attrs)
-
     def _hours_since_last_bypass(self):
-        """Hours since the last confirmed bypass, read from sensor.zendure_bypass_reached_at.
-
-        That sensor is written by ZendureStateMachine (live timestamp on real
-        bypass, fallback ~7 days ago on cold start). On any read error we
-        return a safely-large value so the bypass-grace override doesn't fire
-        accidentally.
-        """
+        """Hours since sensor.zendure_bypass_reached_at. On any error, returns
+        a large value — safe direction (post-bypass deep-drain stays disengaged
+        and the weekly force-charge fires; we'd rather charge than over-drain)."""
         raw = self.get_state("sensor.zendure_bypass_reached_at")
         if raw in (None, "unknown", "unavailable"):
             return 999.0
@@ -264,15 +296,21 @@ class ZendureSetpoint(hass.Hass):
         except (ValueError, TypeError):
             return 999.0
         now = self.datetime()
-        # AppDaemon's self.datetime() may be naive depending on host config;
-        # match the saved timestamp's awareness so the subtraction works.
         if (last.tzinfo is None) != (now.tzinfo is None):
             last = last.replace(tzinfo=now.tzinfo)
         return (now - last).total_seconds() / 3600.0
 
+    def _bootstrap_charge_latch(self):
+        for entity in ("sensor.zendure_battery_discharged_shadow",
+                       "zendure.battery_discharged"):
+            v = self.get_state(entity)
+            if v in (None, "unknown", "unavailable"):
+                continue
+            return str(v).lower() in ("true", "on")
+        return False
+
     def _dry_run(self):
-        """Default to True (safe / shadow) when the helper is missing."""
-        state = self.get_state("input_boolean.zendure_dry_run")
-        if state in (None, "unknown", "unavailable"):
-            return True
-        return state == "on"
+        v = self.get_state("input_boolean.zendure_dry_run")
+        if v in (None, "unknown", "unavailable"):
+            return True  # safe default: shadow
+        return v == "on"
