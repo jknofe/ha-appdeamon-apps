@@ -5,7 +5,13 @@ cannot use right now is stored in the battery.
 
 The control law is one equation:
 
-    outputLimit = max(0, consumption - HM400_output)
+    outputLimit = max(0, power_consumption - solar_secondary_power)
+
+solar_secondary_power is the uncontrolled solar inverter (HM-400). The
+Zendure-fed inverter (solar_primary, HM-1500) is what we drive via
+outputLimit; it sources from solar_input_power (Zendure-side panels)
+first and the battery as needed. See README.md for the energy-flow
+diagram and apps.yaml for the configurable sensor names.
 
 Everything else in this file is the protective scaffolding around it:
   - SoC floor (10 % within 10 h of bypass, 20 % otherwise) so we don't drain to 0
@@ -83,17 +89,24 @@ def pick_mode(soc, solar_input, hours_since_bypass,
     return (MODE_FREE, False)
 
 
-def compute_setpoint(consumption, hm400, solar_input, mode,
+def compute_setpoint(consumption, solar_secondary, solar_input, mode,
                      max_cap, power_step, bias_steps):
     """Pipeline: target → quantize → mode cap → clamp.
 
-    Half-step bias shifts the floor-quantize result down by half a step so
-    we err on slight under-supply (small grid import) instead of slight
-    over-supply (small grid export).
+    The control law: outputLimit = max(0, consumption - solar_secondary).
+    solar_secondary is the uncontrolled solar inverter (HM-400 in this
+    install) — what's already going to home from outside our control.
+    Subtracting it leaves the deficit we ask the Zendure-fed inverter
+    (solar_primary, HM-1500) to cover, sourcing from solar_input first
+    and battery as needed.
+
+    Half-step bias shifts the floor-quantize result down by half a step
+    so we err on slight under-supply (small grid import) instead of
+    slight over-supply (small grid export).
     """
     if mode == MODE_CHARGE:
         return 0
-    raw_target = consumption - hm400 - (power_step * bias_steps)
+    raw_target = consumption - solar_secondary - (power_step * bias_steps)
     quantized = (raw_target // power_step) * power_step
     if mode == MODE_SOLAR_ONLY:
         cap = (solar_input // power_step) * power_step
@@ -107,15 +120,6 @@ def compute_setpoint(consumption, hm400, solar_input, mode,
     if setpoint > cap:
         setpoint = cap
     return int(setpoint)
-
-
-def derive_hm400_from_shelly(power_solargen, outputhomepower):
-    """Fallback when sensor.hm_400_power is unavailable (OpenDTU WiFi drop).
-    Shelly 1PM sees total inverter AC (HM-400 + HM-1500); Zendure's
-    outputhomepower is its DC feed to HM-1500 (≈ HM-1500 AC). The
-    difference recovers HM-400. Clamped at 0 because measurement skew can
-    push the difference slightly negative."""
-    return max(0, power_solargen - outputhomepower)
 
 
 # ----------------------------------------------------------------------
@@ -143,6 +147,14 @@ class ZendureSetpoint(hass.Hass):
         # it can't be flipped by accident from the dashboard. Default True
         # (shadow) so a missing key is never a surprise live-write.
         self.dry_run                = bool(a.get("dry_run", True))
+        # Configurable external power-input sensors. See apps.yaml comment
+        # and README.md for the physical mapping. Defaults preserve the
+        # legacy hardcoded entity IDs for this user's installation.
+        pi = a.get("power_inputs", {})
+        self.power_consumption_sensor      = pi.get("power_consumption",     "sensor.power_consumption")
+        self.solar_primary_power_sensor    = pi.get("solar_primary_power",   "sensor.zendure_mqtt_outputhomepower")
+        self.solar_secondary_power_sensor  = pi.get("solar_secondary_power", "sensor.hm_400_power")
+        self.solar_input_power_sensor      = pi.get("solar_input_power",     "sensor.zendure_mqtt_solarinputpower")
 
         # In-memory state. charge_latch is bootstrapped from HA so a restart
         # mid-discharge doesn't briefly re-enable drain. free_latch is
@@ -163,9 +175,9 @@ class ZendureSetpoint(hass.Hass):
             self._is_running = True
 
             soc                 = self._get_state_int("sensor.zendure_mqtt_electriclevel")
-            consumption         = self._get_state_int("sensor.power_consumption")
-            hm400               = self._read_hm400_with_fallback()
-            solar_input         = self._get_state_int("sensor.zendure_mqtt_solarinputpower")
+            consumption         = self._get_state_int(self.power_consumption_sensor)
+            solar_secondary     = self._get_state_int(self.solar_secondary_power_sensor)
+            solar_input         = self._get_state_int(self.solar_input_power_sensor)
             hours_since_bypass  = self._hours_since_last_bypass()
 
             floor = effective_floor(
@@ -191,7 +203,7 @@ class ZendureSetpoint(hass.Hass):
             )
 
             setpoint = compute_setpoint(
-                consumption, hm400, solar_input, mode,
+                consumption, solar_secondary, solar_input, mode,
                 self.max_cap, self.power_step, self.bias_steps,
             )
 
@@ -271,22 +283,6 @@ class ZendureSetpoint(hass.Hass):
             return int(float(val))
         except (ValueError, TypeError):
             return default
-
-    def _read_hm400_with_fallback(self):
-        primary = self.get_state("sensor.hm_400_power")
-        if primary not in (None, "unknown", "unavailable"):
-            try:
-                return int(float(primary))
-            except (ValueError, TypeError):
-                pass
-        shelly = self.get_state("sensor.power_solargen")
-        zendure_home = self.get_state("sensor.zendure_mqtt_outputhomepower")
-        if shelly in (None, "unknown", "unavailable") or zendure_home in (None, "unknown", "unavailable"):
-            return 0
-        try:
-            return int(derive_hm400_from_shelly(float(shelly), float(zendure_home)))
-        except (ValueError, TypeError):
-            return 0
 
     def _hours_since_last_bypass(self):
         """Hours since sensor.zendure_bypass_reached_at. On any error, returns

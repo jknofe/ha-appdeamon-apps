@@ -5,28 +5,28 @@ hello_world:
 power_meter:
   module: PowerMeter
   class: PowerMeter
-zendure_state_machine:
-  module: ZendureStateMachine
-  class: ZendureStateMachine
-  # Lean: now bypass-tracker only. No periodic mode tick, no read topic.
-  mqtt_topic_write: "iot/73bkTV/SE7546CU/properties/write"
-  # dry_run is config-only (no HA toggle) so it can't be flipped by accident
-  # from a dashboard. true = shadow (writes go to *_shadow and shadow/<topic>),
-  # false = live. Both apps must be set the same way.
-  dry_run: true
-  bypass_tracker:
-    debounce_seconds: 60               # confirm bypass after this many seconds of stable predicate
-    solar_threshold_w: 50              # solar must exceed this for the predicate (strict >)
-    fallback_days_when_missing: 7      # bootstrap timestamp when sensor is missing/unparseable
-  firmware_init:
-    min_soc: 100                       # 10 % × 10 (Zendure stores minSoc ×10)
-    pass_mode: 0                       # 0 = normal operation
 zendure_setpoint:
   module: ZendureSetpoint
   class: ZendureSetpoint
   update_interval: "20s"
   mqtt_topic_write: "iot/73bkTV/SE7546CU/properties/write"
-  dry_run: true                        # see zendure_state_machine.dry_run
+  # dry_run is config-only (no HA toggle) so it can't be flipped by accident
+  # from a dashboard. true = shadow (writes go to *_shadow and shadow/<topic>),
+  # false = live. Both apps must be set the same way.
+  dry_run: true
+  # The four external power-measurement sensors. All other sensors used by
+  # these apps come from the Zendure HA integration with standardized names
+  # (sensor.zendure_mqtt_*) and stay hardcoded.
+  #   power_consumption     home load total (e.g. from a Shelly 3EM via PowerMeter.py)
+  #   solar_primary_power   HM-1500 AC output — the inverter we control via outputLimit
+  #   solar_secondary_power HM-400 AC output  — uncontrolled solar inverter (subtracted from demand)
+  #   solar_input_power     DC into the Zendure hub from its own panels (drives dual-limit cap)
+  # See README.md for the physical flow diagram.
+  power_inputs: &power_inputs
+    power_consumption:     "sensor.power_consumption"
+    solar_primary_power:   "sensor.zendure_mqtt_outputhomepower"
+    solar_secondary_power: "sensor.hm_400_power"
+    solar_input_power:     "sensor.zendure_mqtt_solarinputpower"
   max_cap: 720                         # W — single output cap (was dual_cap=720 / serve_cap=540)
   power_step: 30                       # W — quantization step
   power_target_bias_steps: 0.5         # subtract this many steps from raw target (small grid-import bias)
@@ -35,3 +35,17 @@ zendure_setpoint:
   soc_promote_to_free: 30              # %  — SoC at/above which we commit to drain mode for the cycle
   solar_threshold_w: 100               # W  — solar input above this counts as "real daytime" for mode picking
   weekly_charge_force_hours: 174       # h  — 7.5 d without confirmed bypass forces 'charge' (battery health)
+zendure_state_machine:
+  module: ZendureStateMachine
+  class: ZendureStateMachine
+  # Lean: now bypass-tracker only. No periodic mode tick, no read topic.
+  mqtt_topic_write: "iot/73bkTV/SE7546CU/properties/write"
+  dry_run: true                        # see zendure_setpoint.dry_run
+  power_inputs: *power_inputs          # YAML anchor: same sensor names as the setpoint app
+  bypass_tracker:
+    debounce_seconds: 60               # confirm bypass after this many seconds of stable predicate
+    solar_threshold_w: 50              # solar must exceed this for the predicate (strict >)
+    fallback_days_when_missing: 7      # bootstrap timestamp when sensor is missing/unparseable
+  firmware_init:
+    min_soc: 100                       # 10 % × 10 (Zendure stores minSoc ×10)
+    pass_mode: 0                       # 0 = normal operation

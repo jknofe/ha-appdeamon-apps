@@ -26,12 +26,6 @@ import json
 import appdaemon.plugins.hass.hassapi as hass
 
 
-BYPASS_INPUT_SENSORS = (
-    "sensor.zendure_mqtt_electriclevel",
-    "sensor.zendure_mqtt_packstate",
-    "sensor.zendure_mqtt_outputpackpower",
-    "sensor.zendure_mqtt_solarinputpower",
-)
 BYPASS_REPORTED_SENSOR = "sensor.zendure_mqtt_bypass"
 
 
@@ -70,12 +64,25 @@ class ZendureStateMachine(hass.Hass):
         self.init_pass_mode             = fw.get("pass_mode", 0)   # normal
         # dry_run lives in apps.yaml only — see ZendureSetpoint for rationale.
         self.dry_run                    = bool(a.get("dry_run", True))
+        # Only one of the four power-input sensors is needed here: the DC
+        # solar feeding the Zendure hub, used in the bypass predicate.
+        # The other three (power_consumption, solar_primary, solar_secondary)
+        # are setpoint-app concerns. The remaining listen_state inputs
+        # (electriclevel, packstate, outputpackpower) come from the Zendure
+        # HA integration with standardized names — hardcoded.
+        pi = a.get("power_inputs", {})
+        self.solar_input_power_sensor   = pi.get("solar_input_power", "sensor.zendure_mqtt_solarinputpower")
 
         self._pending_handle = None
         self._last_bypass_status = None
 
         self._bootstrap_bypass_timestamp()
-        for entity in BYPASS_INPUT_SENSORS:
+        for entity in (
+            "sensor.zendure_mqtt_electriclevel",
+            "sensor.zendure_mqtt_packstate",
+            "sensor.zendure_mqtt_outputpackpower",
+            self.solar_input_power_sensor,
+        ):
             self.listen_state(self._on_bypass_input_change, entity)
         self.listen_state(self._on_zendure_reported_change, BYPASS_REPORTED_SENSOR)
         self._update_bypass_status_sensor()
@@ -144,7 +151,7 @@ class ZendureStateMachine(hass.Hass):
             soc=self._get_state_int("sensor.zendure_mqtt_electriclevel"),
             packstate=self.get_state("sensor.zendure_mqtt_packstate") or "",
             outputpackpower=self._get_state_int("sensor.zendure_mqtt_outputpackpower"),
-            solarinputpower=self._get_state_int("sensor.zendure_mqtt_solarinputpower"),
+            solarinputpower=self._get_state_int(self.solar_input_power_sensor),
             solar_threshold=self.solar_threshold_w,
         )
 
