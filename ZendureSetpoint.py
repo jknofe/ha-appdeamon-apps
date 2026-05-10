@@ -249,7 +249,7 @@ class ZendureSetpoint(hass.Hass):
         if self.dry_run:
             target, friendly = "sensor.zendure_operation_mode_shadow", "Zendure Operation Mode (shadow)"
         else:
-            target, friendly = "zendure.operation_mode", "Zendure Operation Mode"
+            target, friendly = "sensor.zendure_operation_mode", "Zendure Operation Mode"
         if self.get_state(target) == mode:
             return
         self.set_state(target, state=mode, attributes={"friendly_name": friendly})
@@ -303,8 +303,10 @@ class ZendureSetpoint(hass.Hass):
         return (now - last).total_seconds() / 3600.0
 
     def _bootstrap_charge_latch(self):
-        for entity in ("sensor.zendure_battery_discharged_shadow",
-                       "zendure.battery_discharged"):
+        # Live entity first (post-cutover), shadow second (in case the previous
+        # AppDaemon run was still in dry_run). Whichever is present wins.
+        for entity in ("sensor.zendure_battery_discharged",
+                       "sensor.zendure_battery_discharged_shadow"):
             v = self.get_state(entity)
             if v in (None, "unknown", "unavailable"):
                 continue
