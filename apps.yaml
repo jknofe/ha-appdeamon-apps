@@ -13,7 +13,7 @@ zendure_setpoint:
   # dry_run is config-only (no HA toggle) so it can't be flipped by accident
   # from a dashboard. true = shadow (writes go to *_shadow and shadow/<topic>),
   # false = live. Both apps must be set the same way.
-  dry_run: true
+  dry_run: false
   # The four external power-measurement sensors. All other sensors used by
   # these apps come from the Zendure HA integration with standardized names
   # (sensor.zendure_mqtt_*) and stay hardcoded.
@@ -42,7 +42,7 @@ zendure_state_machine:
   class: ZendureStateMachine
   # Lean: now bypass-tracker only. No periodic mode tick, no read topic.
   mqtt_topic_write: "iot/73bkTV/SE7546CU/properties/write"
-  dry_run: true                        # see zendure_setpoint.dry_run
+  dry_run: false                        # see zendure_setpoint.dry_run
   power_inputs: *power_inputs          # YAML anchor: same sensor names as the setpoint app
   bypass_tracker:
     debounce_seconds: 60               # confirm bypass after this many seconds of stable predicate
