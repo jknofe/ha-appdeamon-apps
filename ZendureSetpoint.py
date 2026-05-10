@@ -7,11 +7,12 @@ The control law is one equation:
 
     outputLimit = max(0, power_consumption - solar_secondary_power)
 
-solar_secondary_power is the uncontrolled solar inverter (HM-400). The
-Zendure-fed inverter (solar_primary, HM-1500) is what we drive via
-outputLimit; it sources from solar_input_power (Zendure-side panels)
-first and the battery as needed. See README.md for the energy-flow
-diagram and apps.yaml for the configurable sensor names.
+solar_secondary_power is the uncontrolled solar inverter (HM-400). We
+command the Zendure hub via outputLimit; the hub routes power from
+solar_input_power (Zendure-side panels) first and the battery as
+needed, feeding HM-1500 with that much DC. HM-1500 is a downstream
+DC→AC converter — we don't command it directly. See README.md for the
+energy-flow diagram and apps.yaml for the configurable sensor names.
 
 Everything else in this file is the protective scaffolding around it:
   - SoC floor (10 % within 10 h of bypass, 20 % otherwise) so we don't drain to 0
@@ -96,9 +97,10 @@ def compute_setpoint(consumption, solar_secondary, solar_input, mode,
     The control law: outputLimit = max(0, consumption - solar_secondary).
     solar_secondary is the uncontrolled solar inverter (HM-400 in this
     install) — what's already going to home from outside our control.
-    Subtracting it leaves the deficit we ask the Zendure-fed inverter
-    (solar_primary, HM-1500) to cover, sourcing from solar_input first
-    and battery as needed.
+    Subtracting it leaves the deficit we ask the Zendure hub to cover.
+    The hub routes from solar_input (its own panels) first and the
+    battery as needed, then hands DC to HM-1500 which converts it to AC
+    for the home. We command the Zendure, not HM-1500.
 
     Half-step bias shifts the floor-quantize result down by half a step
     so we err on slight under-supply (small grid import) instead of

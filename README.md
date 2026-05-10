@@ -17,9 +17,9 @@ control. Two main apps:
 flowchart LR
     PRIMARY_PANELS["Primary solar panels<br/>(Zendure-side)"]
     SECONDARY_PANELS["Secondary solar panels<br/>(independent)"]
-    ZENDURE["Zendure hub<br/>(routes solar / battery)"]
+    ZENDURE["Zendure hub<br/>(commanded via outputLimit;<br/>routes solar / battery)"]
     BATT[("Battery")]
-    HM1500["HM-1500 inverter<br/>(controlled via outputLimit)"]
+    HM1500["HM-1500 inverter<br/>(downstream DC&rarr;AC converter)"]
     HM400["HM-400 inverter<br/>(uncontrolled)"]
     HOME(("Home loads"))
     GRID(("Grid"))
@@ -43,7 +43,7 @@ installation; change them to match yours.
 | Logical name | Physical meaning | Used by |
 |---|---|---|
 | `power_consumption` | Total home load (W) | Setpoint — control rule (target = consumption − solar_secondary) |
-| `solar_primary_power` | HM-1500 AC output (W). The inverter we control via `outputLimit`. | Reference / observability. The control loop sets it, doesn't read it back. |
+| `solar_primary_power` | HM-1500 AC output (W). HM-1500 is a downstream DC→AC converter; we don't command it directly — we command the Zendure hub via `outputLimit` and the Zendure feeds HM-1500 with that much DC power. | Reference / observability. The control loop sets `outputLimit`, doesn't read this number back. |
 | `solar_secondary_power` | HM-400 AC output (W). Uncontrolled solar inverter. | Setpoint — subtracted from home demand in the rule equation. |
 | `solar_input_power` | DC into the Zendure hub from its own panels (W). | Setpoint — `dual-limit`/`solar-only` cap. State machine — bypass predicate. |
 

@@ -18,9 +18,11 @@ zendure_setpoint:
   # these apps come from the Zendure HA integration with standardized names
   # (sensor.zendure_mqtt_*) and stay hardcoded.
   #   power_consumption     home load total (e.g. from a Shelly 3EM via PowerMeter.py)
-  #   solar_primary_power   HM-1500 AC output — the inverter we control via outputLimit
+  #   solar_primary_power   HM-1500 AC output — downstream DC→AC converter; we don't command HM-1500
+  #                         directly, we command the Zendure hub via outputLimit and the hub feeds
+  #                         HM-1500 with that much DC. Currently observability-only.
   #   solar_secondary_power HM-400 AC output  — uncontrolled solar inverter (subtracted from demand)
-  #   solar_input_power     DC into the Zendure hub from its own panels (drives dual-limit cap)
+  #   solar_input_power     DC into the Zendure hub from its own panels (drives solar-only cap)
   # See README.md for the physical flow diagram.
   power_inputs: &power_inputs
     power_consumption:     "sensor.power_consumption"
