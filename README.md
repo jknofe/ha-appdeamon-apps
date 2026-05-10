@@ -52,6 +52,33 @@ setpoint app treats it as 0. That's the safe direction: the Zendure is
 slightly over-commanded (extra battery drain) but the home never exports
 to grid.
 
+### Why `solar_primary_power` defaults to a Zendure-reported number
+
+`sensor.zendure_mqtt_outputhomepower` is the Zendure firmware's reported
+DC feed into HM-1500 — about 5 % optimistic vs the actual HM-1500 AC
+output (the inverter loses ~5 % converting DC → AC). A direct AC
+measurement (e.g. a dedicated Shelly on the HM-1500 line) would be more
+truthful. We deliberately don't use one:
+
+- **Reliability.** The Zendure MQTT stream keeps publishing when OpenDTU
+  freezes — the same WiFi-drop failure mode that motivated the HM-400
+  fallback path. HM-inverter readings can simply disappear.
+- **Update cadence.** Zendure reports much faster than the HM inverters,
+  so the value is fresher.
+- **Not actually used in the control loop.** The setpoint equation only
+  uses `power_consumption − solar_secondary_power`. `solar_primary_power`
+  is read into config and never used in math; it's purely for
+  observability and dashboards. So the ~5 % DC-vs-AC accuracy gap doesn't
+  propagate into anything we compute.
+
+The ~5 % HM-1500 inverter loss is real and produces a chronic ~20–50 W
+grid import depending on `outputLimit` — the safe direction, blended
+with the deliberate `power_target_bias_steps: 0.5` half-step
+under-supply. Nothing to compensate for as long as the control loop
+stays open-loop. If/when we add closed-loop correction (read HM-1500
+actual to true up `outputLimit`), the sensor choice becomes
+load-bearing and we'd want a real AC measurement at that point.
+
 ## The control law
 
 ```
