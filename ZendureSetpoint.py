@@ -56,30 +56,39 @@ def update_charge_latch(soc, floor, hysteresis_pct, was_latched):
 def pick_mode(soc, solar_input, hours_since_bypass,
               charge_latched, free_latched_in,
               soc_promote, solar_threshold, weekly_force_hours):
-    """Returns (mode, free_latched_out).
+    """Returns (mode, free_latched_out, reason).
 
     Decision order (first match wins):
-      1. weekly force-charge → 'charge'
-      2. charge latch on     → 'charge'
-      3. SoC ≥ promote OR free_latch already on → 'free'
-      4. real daylight + mid-SoC → 'solar-only'
-      5. otherwise (mid-SoC, no real sun)        → 'free'
+      1. weekly force-charge      → 'charge'
+      2. charge latch on          → 'charge'
+      3. free latch already on    → 'free'
+      4. SoC ≥ promote threshold  → 'free'  (and engages free latch)
+      5. mid-SoC + real daylight  → 'solar-only'
+      6. mid-SoC, no real sun     → 'free'
 
     free_latch is the daily drain commitment: once SoC has reached
     soc_promote, we stay in 'free' until the charge latch resets it.
     Stops a transient mid-day SoC dip from yanking us back to solar-only
     and stranding stored energy.
+
+    `reason` is a short human-readable string naming the rule that
+    fired plus the relevant input values — useful when the caller
+    logs it on mode transitions.
     """
     if hours_since_bypass >= weekly_force_hours:
-        return (MODE_CHARGE, False)
+        return (MODE_CHARGE, False,
+                f"weekly_force (hours_since_bypass={hours_since_bypass:.0f} >= {weekly_force_hours})")
     if charge_latched:
-        return (MODE_CHARGE, False)
-    free_latched_out = free_latched_in or (soc >= soc_promote)
-    if free_latched_out:
-        return (MODE_FREE, True)
+        return (MODE_CHARGE, False, f"charge_latch (soc={soc})")
+    if free_latched_in:
+        return (MODE_FREE, True, f"free_latch carried (soc={soc})")
+    if soc >= soc_promote:
+        return (MODE_FREE, True, f"soc_promote (soc={soc} >= {soc_promote})")
     if solar_input > solar_threshold:
-        return (MODE_SOLAR_ONLY, False)
-    return (MODE_FREE, False)
+        return (MODE_SOLAR_ONLY, False,
+                f"mid_soc + sun (soc={soc}, solar={solar_input} > {solar_threshold})")
+    return (MODE_FREE, False,
+            f"mid_soc, no sun (soc={soc}, solar={solar_input} <= {solar_threshold})")
 
 
 def compute_setpoint(consumption, solar_secondary, solar_input, mode,
@@ -179,7 +188,7 @@ class ZendureSetpoint(hass.Hass):
                     # Hitting the floor resets the daily drain commitment.
                     self._free_latch = False
 
-            mode, self._free_latch = pick_mode(
+            mode, self._free_latch, reason = pick_mode(
                 soc, solar_input, hours_since_bypass,
                 self._charge_latch, self._free_latch,
                 self.soc_promote, self.solar_threshold_w, self.weekly_force_hours,
@@ -194,7 +203,7 @@ class ZendureSetpoint(hass.Hass):
             self._write_mode(mode)
             if mode != self._mode_old:
                 if self._mode_old is not None:
-                    self.log(f"Mode {self._mode_old} -> {mode}")
+                    self.log(f"Mode {self._mode_old} -> {mode}: {reason}")
                 self._mode_old = mode
             if self._setpoint_old != setpoint:
                 self._publish_outputlimit(setpoint)
