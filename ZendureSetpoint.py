@@ -1,30 +1,23 @@
 """Zendure SolarFlow controller — picks mode + computes outputLimit (every 20 s).
 
-Lean rewrite. Goal: maximize self-consumption of solar — only what the home
-cannot use right now is stored in the battery.
-
-The control law is one equation:
+Goal: maximize self-consumption of solar — only what the home cannot use
+right now is stored in the battery. The control law is:
 
     outputLimit = max(0, power_consumption - solar_secondary_power)
 
-solar_secondary_power is the uncontrolled solar inverter (HM-400). We
-command the Zendure hub via outputLimit; the hub routes power from
-solar_input_power (Zendure-side panels) first and the battery as
-needed, feeding HM-1500 with that much DC. HM-1500 is a downstream
-DC→AC converter — we don't command it directly. See README.md for the
-energy-flow diagram and apps.yaml for the configurable sensor names.
+We command the Zendure hub via outputLimit; the hub sources from its
+own panels (solar_input_power) first and the battery as needed, feeding
+the primary inverter with that much DC.
 
-Everything else in this file is the protective scaffolding around it:
-  - SoC floor (10 % within 10 h of bypass, 20 % otherwise) so we don't drain to 0
-  - Charge latch with 5 % hysteresis so a 1 % SoC bounce doesn't flap discharge
-  - Three modes that pick a cap on outputLimit:
-      'charge'      → 0           (battery only charges; solar to home via HM-1500 stops)
-      'solar-only'  → solar_input (mid-SoC daylight; battery preserved, surplus charges)
-      'free'        → max_cap     (battery drains as needed; surplus solar still charges)
-  - Weekly force-charge so the battery hits 100 % at least every 7.5 days
+Three modes pick a cap on outputLimit:
+    'charge'      → 0                 (battery only charges)
+    'solar-only'  → quantize(solar)   (battery preserved, surplus charges)
+    'free'        → max_cap           (battery drains as needed)
 
-The state-machine app is now bypass-tracker-only; mode lives here so the
-20-s tick re-derives it from current state without a separate cadence.
+Protective scaffolding:
+    - SoC floor (10 % within 10 h of bypass, 20 % otherwise)
+    - Charge latch with 5 % hysteresis (avoids flap on 1 % SoC bounce)
+    - Weekly force-charge if no full bypass in ~7.5 days
 """
 import datetime
 import json
@@ -45,8 +38,8 @@ MODE_FREE       = 'free'
 
 def effective_floor(hours_since_bypass, after_bypass_pct, default_pct, window_hours):
     """SoC floor below which we stop discharging. Drops to `after_bypass_pct`
-    inside the post-bypass window so we can use just-charged energy more
-    deeply, then back to `default_pct` outside it."""
+    inside the post-bypass window so we can drain just-charged energy more
+    deeply; back to `default_pct` outside it (preserve a reserve)."""
     if hours_since_bypass < window_hours:
         return after_bypass_pct
     return default_pct
@@ -54,8 +47,7 @@ def effective_floor(hours_since_bypass, after_bypass_pct, default_pct, window_ho
 
 def update_charge_latch(soc, floor, hysteresis_pct, was_latched):
     """Latch with hysteresis on the charge trigger. Engages at SoC ≤ floor,
-    releases at SoC ≥ floor + hysteresis. Without it a 1 % SoC bounce flaps
-    discharge on/off at the boundary."""
+    releases at SoC ≥ floor + hysteresis — avoids flap on a 1 % SoC bounce."""
     if was_latched:
         return soc < floor + hysteresis_pct
     return soc <= floor
@@ -66,16 +58,16 @@ def pick_mode(soc, solar_input, hours_since_bypass,
               soc_promote, solar_threshold, weekly_force_hours):
     """Returns (mode, free_latched_out).
 
-    Decision order:
-      1. weekly force-charge (battery health) → 'charge'
-      2. charge latch engaged                → 'charge'
-      3. SoC has reached promote threshold OR free_latch already on → 'free'
-      4. real daylight + mid-SoC → 'solar-only' (conserve battery, charge from sun)
-      5. otherwise → 'free' (mid-SoC at night: battery is the only buffer)
+    Decision order (first match wins):
+      1. weekly force-charge → 'charge'
+      2. charge latch on     → 'charge'
+      3. SoC ≥ promote OR free_latch already on → 'free'
+      4. real daylight + mid-SoC → 'solar-only'
+      5. otherwise (mid-SoC, no real sun)        → 'free'
 
-    The free_latch is the daily drain commitment: once SoC has reached
-    soc_promote at least once, we stay in 'free' until charge mode resets it.
-    Prevents a transient mid-day SoC dip from yanking us back to solar-only
+    free_latch is the daily drain commitment: once SoC has reached
+    soc_promote, we stay in 'free' until the charge latch resets it.
+    Stops a transient mid-day SoC dip from yanking us back to solar-only
     and stranding stored energy.
     """
     if hours_since_bypass >= weekly_force_hours:
@@ -93,14 +85,6 @@ def pick_mode(soc, solar_input, hours_since_bypass,
 def compute_setpoint(consumption, solar_secondary, solar_input, mode,
                      max_cap, power_step, bias_steps):
     """Pipeline: target → quantize → mode cap → clamp.
-
-    The control law: outputLimit = max(0, consumption - solar_secondary).
-    solar_secondary is the uncontrolled solar inverter (HM-400 in this
-    install) — what's already going to home from outside our control.
-    Subtracting it leaves the deficit we ask the Zendure hub to cover.
-    The hub routes from solar_input (its own panels) first and the
-    battery as needed, then hands DC to HM-1500 which converts it to AC
-    for the home. We command the Zendure, not HM-1500.
 
     Half-step bias shifts the floor-quantize result down by half a step
     so we err on slight under-supply (small grid import) instead of
@@ -145,22 +129,19 @@ class ZendureSetpoint(hass.Hass):
         self.soc_promote            = a.get("soc_promote_to_free", 30)
         self.solar_threshold_w      = a.get("solar_threshold_w", 100)
         self.weekly_force_hours     = a.get("weekly_charge_force_hours", 174)
-        # dry_run is set in apps.yaml only — deliberately not a HA helper so
-        # it can't be flipped by accident from the dashboard. Default True
-        # (shadow) so a missing key is never a surprise live-write.
+        # dry_run is config-only (no HA toggle) — can't be flipped by
+        # accident. Default True (shadow) so a missing key never surprises.
         self.dry_run                = bool(a.get("dry_run", True))
-        # Configurable external power-input sensors. See apps.yaml comment
-        # and README.md for the physical mapping. Defaults preserve the
-        # legacy hardcoded entity IDs for this user's installation.
+        # External power-input sensors — entity IDs configurable via apps.yaml.
         pi = a.get("power_inputs", {})
         self.power_consumption_sensor      = pi.get("power_consumption",     "sensor.power_consumption")
         self.solar_primary_power_sensor    = pi.get("solar_primary_power",   "sensor.zendure_mqtt_outputhomepower")
         self.solar_secondary_power_sensor  = pi.get("solar_secondary_power", "sensor.hm_400_power")
         self.solar_input_power_sensor      = pi.get("solar_input_power",     "sensor.zendure_mqtt_solarinputpower")
 
-        # In-memory state. charge_latch is bootstrapped from HA so a restart
+        # In-memory state. charge_latch bootstraps from HA so a restart
         # mid-discharge doesn't briefly re-enable drain. free_latch is
-        # always re-derived from the next tick (one tick of slack is fine).
+        # re-derived from the next tick.
         self._charge_latch = self._bootstrap_charge_latch()
         self._free_latch = False
         self._setpoint_old = self._get_state_int("sensor.zendure_setpoint", default=None)
@@ -228,10 +209,7 @@ class ZendureSetpoint(hass.Hass):
     # ------------------------------------------------------------------
 
     def _write_setpoint(self, setpoint):
-        # State string formatted as repr(round(x, 0)) to match the legacy
-        # python_script byte-for-byte (e.g. "30.0") so shadow vs live charts
-        # compare cleanly during the verification window.
-        state_str = repr(round(setpoint, 0))
+        state_str = repr(round(setpoint, 0))   # e.g. "30.0"
         if self.dry_run:
             target, friendly = "sensor.zendure_setpoint_shadow", "Zendure Setpoint (shadow)"
         else:
@@ -288,8 +266,8 @@ class ZendureSetpoint(hass.Hass):
 
     def _hours_since_last_bypass(self):
         """Hours since sensor.zendure_bypass_reached_at. On any error, returns
-        a large value — safe direction (post-bypass deep-drain stays disengaged
-        and the weekly force-charge fires; we'd rather charge than over-drain)."""
+        a large value — safe direction: post-bypass deep-drain stays disengaged
+        and the weekly force-charge fires (rather charge than over-drain)."""
         raw = self.get_state("sensor.zendure_bypass_reached_at")
         if raw in (None, "unknown", "unavailable"):
             return 999.0
@@ -303,8 +281,8 @@ class ZendureSetpoint(hass.Hass):
         return (now - last).total_seconds() / 3600.0
 
     def _bootstrap_charge_latch(self):
-        # Live entity first (post-cutover), shadow second (in case the previous
-        # AppDaemon run was still in dry_run). Whichever is present wins.
+        # Live entity first; shadow second as fallback when the previous
+        # AppDaemon run was in dry_run.
         for entity in ("sensor.zendure_battery_discharged",
                        "sensor.zendure_battery_discharged_shadow"):
             v = self.get_state(entity)

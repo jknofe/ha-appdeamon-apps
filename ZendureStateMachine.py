@@ -1,24 +1,21 @@
 """Zendure SolarFlow bypass tracker + one-time firmware init.
 
-Lean rewrite. The legacy state machine's mode-picking has moved into
-ZendureSetpoint (decided per 20-s tick from current state, no separate
-cadence needed). This app now owns just two responsibilities:
+Two responsibilities:
 
   1. Bypass tracker (event-driven via listen_state):
      Detect when the battery has fully cycled (electric_level == 100,
      packstate == 'idle', outputpackpower == 0, solar passing through).
-     Debounce 60 s; then latch the timestamp into
-     sensor.zendure_bypass_reached_at, which ZendureSetpoint reads to
+     Debounce 60 s, then latch the timestamp into
+     sensor.zendure_bypass_reached_at — ZendureSetpoint reads this to
      decide the post-bypass deep-drain window and the weekly force-charge.
 
   2. One-time firmware init (5 s after start):
-     Send {minSoc, passMode, outputLimit:0} once so the firmware-side
-     hard floor is at 10 % (our app enforces the higher 10–20 % soft
-     floor via outputLimit). No runtime per-mode flipping anymore.
+     Send {minSoc, passMode, outputLimit:0} so the firmware-side hard
+     floor is at 10 %. The setpoint loop enforces the higher 10–20 %
+     soft floor via outputLimit.
 
-Plus a 4-state diagnostic sensor sensor.zendure_bypass_active that
-exposes our derived predicate vs Zendure's reported `pass` flag, written
-only on flips so HA history stays clean.
+Plus a 4-state diagnostic sensor.zendure_bypass_active that exposes our
+predicate vs Zendure's reported `pass` flag (written only on flips).
 """
 import datetime
 import json
@@ -30,8 +27,8 @@ BYPASS_REPORTED_SENSOR = "sensor.zendure_mqtt_bypass"
 
 
 def is_bypass_active(soc, packstate, outputpackpower, solarinputpower, solar_threshold):
-    """Bypass predicate. Strict > on solar — irradiance noise hovers near
-    the threshold at low light; >= would false-trigger constantly."""
+    """Bypass predicate. Strict > on solar: irradiance noise hovers near the
+    threshold at low light; >= would false-trigger constantly."""
     return (soc == 100
             and packstate == 'idle'
             and outputpackpower == 0
@@ -62,14 +59,11 @@ class ZendureStateMachine(hass.Hass):
         fw = a.get("firmware_init", {})
         self.init_min_soc               = fw.get("min_soc", 100)   # 10 % (Zendure stores ×10)
         self.init_pass_mode             = fw.get("pass_mode", 0)   # normal
-        # dry_run lives in apps.yaml only — see ZendureSetpoint for rationale.
+        # dry_run is config-only — see ZendureSetpoint.
         self.dry_run                    = bool(a.get("dry_run", True))
-        # Only one of the four power-input sensors is needed here: the DC
-        # solar feeding the Zendure hub, used in the bypass predicate.
-        # The other three (power_consumption, solar_primary, solar_secondary)
-        # are setpoint-app concerns. The remaining listen_state inputs
-        # (electriclevel, packstate, outputpackpower) come from the Zendure
-        # HA integration with standardized names — hardcoded.
+        # Only the DC solar input is configurable here (used in the bypass
+        # predicate). The other listen_state inputs come from the Zendure
+        # HA integration with stable names and stay hardcoded.
         pi = a.get("power_inputs", {})
         self.solar_input_power_sensor   = pi.get("solar_input_power", "sensor.zendure_mqtt_solarinputpower")
 
@@ -87,8 +81,7 @@ class ZendureStateMachine(hass.Hass):
         self.listen_state(self._on_zendure_reported_change, BYPASS_REPORTED_SENSOR)
         self._update_bypass_status_sensor()
 
-        # Firmware init delayed 5 s so HA's MQTT integration is fully up
-        # after a restart before we publish.
+        # Delay 5 s so HA's MQTT integration is fully up before we publish.
         self.run_in(self._send_firmware_init, 5)
 
         self.log("ZendureStateMachine started")
@@ -98,10 +91,9 @@ class ZendureStateMachine(hass.Hass):
     # ------------------------------------------------------------------
 
     def _bootstrap_bypass_timestamp(self):
-        """Make sure sensor.zendure_bypass_reached_at exists with a parseable
-        ISO timestamp on boot. Without it the setpoint app would treat the
-        sensor as "never bypassed" forever and weekly-force-charge would fire
-        every tick."""
+        """Ensure sensor.zendure_bypass_reached_at has a parseable ISO timestamp.
+        Without one, the setpoint app sees "never bypassed" forever and the
+        weekly force-charge fires every tick."""
         raw = self.get_state("sensor.zendure_bypass_reached_at")
         if raw and raw not in ("unknown", "unavailable"):
             try:
@@ -181,12 +173,11 @@ class ZendureStateMachine(hass.Hass):
     # ------------------------------------------------------------------
 
     def _send_firmware_init(self, kwargs):
-        """Set the Zendure firmware's persistent minSoc + passMode once.
-        minSoc is the firmware's hard discharge floor; we keep it at the
-        lowest meaningful value (10 %) and let our setpoint loop enforce
-        the higher soft floor (10–20 % depending on bypass recency) via
-        outputLimit. passMode 0 is normal operation. outputLimit:0 puts
-        the inverter in a safe state until the setpoint loop runs."""
+        """Set the firmware's persistent minSoc + passMode once. minSoc is
+        the hard discharge floor — keep it at the lowest meaningful value
+        (10 %) and let the setpoint loop enforce the higher soft floor.
+        outputLimit:0 puts the inverter in a safe state until the setpoint
+        loop's first tick."""
         payload = {"properties": {
             "minSoc": self.init_min_soc,
             "passMode": self.init_pass_mode,
