@@ -19,11 +19,12 @@ In scope:
 - AppDaemon-side bypass tracker hosted inside `ZendureStateMachine`
   (replaces both `automation.zendure_bypass_reached` and the unreliable
   `sensor.zendure_mqtt_bypass`).
+- `EnergyMeterTotals` AppDaemon app (every 5 min; ports `engery_meter_totals.py`).
 
 Out of scope:
 - `zendure_state_decoder.py` — already redundant; HA YAML decodes `packState`.
 - `zendure_battery_state.py` — stub.
-- `power_*.py`, `engery_meter_totals.py` — superseded by `PowerMeter.py`.
+- `power_*.py` — superseded by `PowerMeter.py`.
 - `configuration_mqtt_sensors.yaml` — stays in HA, AppDaemon reads `sensor.zendure_mqtt_*`.
 - `input_select.zendure_operation_mode_strategy` — future manual-override feature.
 
@@ -180,6 +181,15 @@ zendure_state_machine:
 6. Publish payload if non-`None`. Update `zendure.operation_mode` (or `*_shadow`).
 
 Schedule cadence: aligned to clock boundaries via `app_helpers.next_aligned_minute` so ticks land at `:00`/`:20`/`:40` regardless of when AppDaemon restarted; `run_in(_tick, 1)` fires immediately on init so the shadow sensor populates without waiting up to a full interval.
+
+### EnergyMeterTotals (every 5 min)
+
+1. Iterate over `sensors` list (configurable in `apps.yaml`). If any sensor is `unknown` / `unavailable`, skip the tick silently.
+2. Sum live readings and add `legacy_kwh_offset` (fixed kWh from decommissioned inverters — see `apps.yaml` comment for breakdown).
+3. Write `sensor.power_meter_solar_total` (`state_class: total_increasing`, `kWh`) only when the rounded value changes.
+
+No dry_run gate — the sensor is purely observational and has no control effect.
+Ports `engery_meter_totals.py` from `zendure-solarflow-control`; legacy constants (HM-700: 7.114, original HM-1500: 134.176 → sum 141.290) moved to `apps.yaml` as `legacy_kwh_offset`.
 
 ### Bypass tracker (event-driven, hosted in `ZendureStateMachine`)
 
