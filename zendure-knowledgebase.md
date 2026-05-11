@@ -15,8 +15,8 @@ unchanged. No new credentials — reuse HA's MQTT integration.
 
 In scope:
 - `ZendureSetpoint` AppDaemon app (every 20 s; replaces `python_script.zendure_setpoint`).
-- `ZendureStateMachine` AppDaemon app (every 20 min; replaces `python_script.zendure_state_machine`).
-- AppDaemon-side bypass tracker hosted inside `ZendureStateMachine`
+- `ZendureHubMonitor` AppDaemon app (every 20 min; replaces `python_script.zendure_state_machine`).
+- AppDaemon-side bypass tracker hosted inside `ZendureHubMonitor`
   (replaces both `automation.zendure_bypass_reached` and the unreliable
   `sensor.zendure_mqtt_bypass`).
 - `EnergyMeterTotals` AppDaemon app (every 5 min; ports `engery_meter_totals.py`).
@@ -32,13 +32,13 @@ Out of scope:
 
 | # | Decision | Why |
 | --- | --- | --- |
-| Q1 | Two AppDaemon apps: `ZendureSetpoint`, `ZendureStateMachine`. Decoder dropped. | Cadences differ (20 s vs 20 min); decoder is dead. |
+| Q1 | Two AppDaemon apps: `ZendureSetpoint`, `ZendureHubMonitor`. Decoder dropped. | Cadences differ (20 s vs 20 min); decoder is dead. |
 | Q2 | MQTT publish via HA service `mqtt/publish`. | No broker creds in AppDaemon. |
 | Q3 | MQTT subscribe / decoding stays in HA YAML; AppDaemon reads `sensor.zendure_mqtt_*`. | Lowest-risk slice. |
 | Q4 | Persistent flags stay as HA entities where useful. | Visible on dashboards, restored after HA restart. |
 | Q5 | Config in `apps.yaml`; one HA helper (`input_boolean.zendure_dry_run`) for the live shadow-mode toggle. The legacy `input_number.zendure_inverter_max_power` was dropped — `dual_cap` / `serve_cap` are now in `apps.yaml`. | Helper sprawl wasn't paying off; AppDaemon hot-reloads on `apps.yaml` edits anyway. |
 | Q6 | **Shadow mode for the entire prototyping phase.** Live entities (`sensor.zendure_setpoint`, `zendure.operation_mode`) are not written; writes go to `*_shadow` companions. MQTT publishes are redirected to `shadow/<original-topic>` with the exact payload Zendure would receive — an external subscriber can diff us against the legacy `python_script` on the live topic. Cutover via `input_boolean.zendure_dry_run`. | Inverter is driven every 20 s; bug = wrong power flow. |
-| Q7 | Bypass tracker inside `ZendureStateMachine`, `listen_state` + 60 s debounce on `electriclevel==100 ∧ packstate=='idle' ∧ outputpackpower==0 ∧ solarinputpower>50`. Latches `sensor.zendure_bypass_reached_at`. | Replaces unreliable `sensor.zendure_mqtt_bypass` and the dumb HA "battery 100 % long enough" automation; keeps app count at two. |
+| Q7 | Bypass tracker inside `ZendureHubMonitor`, `listen_state` + 60 s debounce on `electriclevel==100 ∧ packstate=='idle' ∧ outputpackpower==0 ∧ solarinputpower>50`. Latches `sensor.zendure_bypass_reached_at`. | Replaces unreliable `sensor.zendure_mqtt_bypass` and the dumb HA "battery 100 % long enough" automation; keeps app count at two. |
 | Q8 | `dual` schedule slots are battery-active hours; `refine_active_mode` decides charge/dual-limit/dual at runtime based on SoC + previous mode. | Matches the production for-loop refinement. SoC-driven mode picking lets us defend a 30 % floor in bad weather without adding day-of-week / month logic. |
 | Q9 | `dual-limit` mode caps output at quantized solar input — output exactly tracks production, battery never drains. Used in the SoC band 20–29 % during dual hours. | "Reach 30 % at least" on overcast days. |
 | Q10 | Cap structure is **two values** (`dual_cap=720`, `serve_cap=540`) plus `dual-limit`'s solar-tracking cap. Dropped: `inverter_max_power_default` (390), `dual_max_power` / `dual_solar_margin` and the `half_solar` cap inside `dual`, `bypass_grace_hours` lift, and the `inverter_max_power` HA helper. | Earlier design had four caps + one helper + one bypass-grace override across modes. Once we accepted that `dual-limit` only fires at low SoC (so a bypass-grace lift is structurally unreachable) and that the inverter has a real efficient working range, two static caps cover everything. |
@@ -46,7 +46,7 @@ Out of scope:
 | Q12 | 174 h (7.5 d) without confirmed bypass force-overrides mode to `charge`. | Ensures weekly full-cycle in winter / multi-day overcast. |
 | Q13 | Discharge floor is **dynamic**, picked each tick by `effective_batt_low_stop`: 10 % when `bypass_now` or `hours_since_last_bypass < 10 h`, else 20 %. Functional/non-sticky equivalent of production's `zendure.batt_low_stop` writes from the state machine. | Freshly-charged battery is safe to drain deeper; no recent bypass means keep a 20 % reserve. Re-evaluating per tick avoids the sticky-state bookkeeping of writing/reading `zendure.batt_low_stop`. |
 | Q14 | In `dry_run`, `ZendureSetpoint` reads the **shadow** mode entity (`sensor.zendure_operation_mode_shadow`) rather than `zendure.operation_mode`. Cutover swaps it back automatically (live entity in live mode). | Without this, the shadow setpoint reacts to whatever the legacy `python_script` writes to the live mode entity — so SP-7 (`charge → 0`) never fires when our state machine wants `charge` but the legacy script still says `serve`. Real symptom seen: shadow mode `charge` while shadow setpoint computed 240–420 W in serve-mode style (history-6.csv, 2026-05-08 17:00). |
-| Q15 | `ZendureStateMachine` re-reads `sensor.zendure_bypass_reached_at` each tick rather than caching it at boot. Helper `_hours_since_last_bypass` mirrors the setpoint side, including TZ-mismatch coercion. Same dry_run / live mode-entity selection as Q14 applies to `old_mode`. | Original code parsed the sensor once into `self._last_bypass_at` at bootstrap. If the sensor was missing at boot, the bootstrap fallback set the cache to `now − 7 d`; ~7 h later `force_weekly_charge` (174 h threshold) fired and **kept firing every tick forever** because nothing updated the cache. The legacy `automation.zendure_bypass_reached` later wrote a fresh timestamp to the sensor, but the state machine never noticed. Real symptom: 100+ consecutive `Mode <X> -> charge` log lines spanning 32 h (a0d7b954_appdaemon_2026-05-09T04-23-03.114Z.log). The repeated *log line* per tick is a separate Q14-style bug — `old_mode` was read from the live entity (legacy says `serve`) while we wrote `charge` to the shadow, so the apparent transition never settled. |
+| Q15 | `ZendureHubMonitor` re-reads `sensor.zendure_bypass_reached_at` each tick rather than caching it at boot. Helper `_hours_since_last_bypass` mirrors the setpoint side, including TZ-mismatch coercion. Same dry_run / live mode-entity selection as Q14 applies to `old_mode`. | Original code parsed the sensor once into `self._last_bypass_at` at bootstrap. If the sensor was missing at boot, the bootstrap fallback set the cache to `now − 7 d`; ~7 h later `force_weekly_charge` (174 h threshold) fired and **kept firing every tick forever** because nothing updated the cache. The legacy `automation.zendure_bypass_reached` later wrote a fresh timestamp to the sensor, but the state machine never noticed. Real symptom: 100+ consecutive `Mode <X> -> charge` log lines spanning 32 h (a0d7b954_appdaemon_2026-05-09T04-23-03.114Z.log). The repeated *log line* per tick is a separate Q14-style bug — `old_mode` was read from the live entity (legacy says `serve`) while we wrote `charge` to the shadow, so the apparent transition never settled. |
 | Q16 | `solar_primary_power_sensor` defaults to `sensor.zendure_mqtt_outputhomepower` (Zendure-reported DC feed to HM-1500, ~5 % optimistic vs actual HM-1500 AC), **not** a direct HM-1500 AC measurement — even though AC would be more truthful. | Three reasons stack: **(a) Reliability** — Zendure MQTT keeps streaming when OpenDTU freezes; HM-inverter readings disappear with their WiFi. Same logic as why `sensor.hm_400_power` has a fallback path. **(b) Update cadence** — Zendure reports much faster than the HM inverters, so the value is fresher. **(c) Not used in the control law** — `solar_primary` is currently observability-only; the setpoint equation uses `consumption − solar_secondary`, never reads HM-1500 back. So the ~5 % DC-vs-AC gap doesn't propagate anywhere. The chronic ~5 % under-supply at the HM-1500 (≈ 20–50 W typical, depending on setpoint) is real but it's inverter physics, not a sensor choice; it produces a small grid-import bias that blends with the deliberate `power_target_bias_steps: 0.5` and is the safe direction (never causes export). Revisit only if/when closed-loop correction (use HM-1500 actual to true up `outputLimit`) is added — at that point the sensor source becomes load-bearing. |
 
 ## MQTT topics
@@ -117,9 +117,9 @@ zendure_setpoint:
   power_target_bias_steps: 0.5         # subtract this many steps from raw target
   batt_low_stop_hysteresis_pct: 5      # latch releases only after SoC recovers by this %
 
-zendure_state_machine:
-  module: ZendureStateMachine
-  class: ZendureStateMachine
+zendure_hub_monitor:
+  module: ZendureHubMonitor
+  class: ZendureHubMonitor
   update_interval: "20min"
   mqtt_topic_write: "iot/73bkTV/SE7546CU/properties/write"
   mqtt_topic_read:  "iot/73bkTV/SE7546CU/properties/read"
@@ -191,7 +191,7 @@ Schedule cadence: aligned to clock boundaries via `app_helpers.next_aligned_minu
 No dry_run gate — the sensor is purely observational and has no control effect.
 Ports `engery_meter_totals.py` from `zendure-solarflow-control`; legacy constants (HM-700: 7.114, original HM-1500: 134.176 → sum 141.290) moved to `apps.yaml` as `legacy_kwh_offset`.
 
-### Bypass tracker (event-driven, hosted in `ZendureStateMachine`)
+### Bypass tracker (event-driven, hosted in `ZendureHubMonitor`)
 
 1. `initialize()` registers `listen_state` on the four predicate inputs.
 2. On any change, evaluate `is_bypass_active(electric_level, packstate, outputpackpower, solarinputpower, solar_threshold)`.

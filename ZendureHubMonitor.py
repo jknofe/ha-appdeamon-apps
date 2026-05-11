@@ -47,7 +47,7 @@ def bypass_status(app_active, zendure_active):
     return "none"
 
 
-class ZendureStateMachine(hass.Hass):
+class ZendureHubMonitor(hass.Hass):
 
     def initialize(self):
         a = self.args
@@ -84,7 +84,7 @@ class ZendureStateMachine(hass.Hass):
         # Delay 5 s so HA's MQTT integration is fully up before we publish.
         self.run_in(self._send_firmware_init, 5)
 
-        self.log("ZendureStateMachine started")
+        self.log("ZendureHubMonitor started")
 
     # ------------------------------------------------------------------
     # Bypass tracker

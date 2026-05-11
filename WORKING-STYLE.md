@@ -10,8 +10,8 @@ Conventions for changes in this repo. Solo dev, direct to `main`, no PRs.
 - **Push**: never automatically. The user pushes manually. Do not run `git push` unless explicitly asked.
 - **Subject style**: imperative mood, capital first letter, no period, no `feat:`/`fix:` prefix, name the class when relevant. Examples:
   ```
-  Add ZendureStateMachine skeleton with shadow-mode outputs
-  Port operation-mode schedule into ZendureStateMachine
+  Add ZendureHubMonitor skeleton with shadow-mode outputs
+  Port operation-mode schedule into ZendureHubMonitor
   Gate Zendure MQTT publish on input_boolean.zendure_dry_run
   Tick Phase 2 boxes in zendure-tasks.md
   ```
@@ -60,7 +60,7 @@ ha-appdeamon-apps/
 ├── apps.yaml                       # AppDaemon manifest
 ├── PowerMeter.py / Hello.py        # existing
 ├── ZendureSetpoint.py              # AppDaemon glue
-├── ZendureStateMachine.py          # AppDaemon glue
+├── ZendureHubMonitor.py          # AppDaemon glue
 ├── zendure_logic.py                # pure functions, no AppDaemon imports
 ├── tests/                          # pytest, AppDaemon-excluded via exclude_dirs
 │   ├── conftest.py

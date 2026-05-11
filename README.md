@@ -44,11 +44,11 @@ Runs every 20 s. Computes the `outputLimit` command for the Zendure SolarFlow hu
 | `soc_promote_to_free` | `30` | SoC (%) at which we commit to drain for the cycle |
 | `solar_threshold_w` | `100` | Solar input above this = real daytime (W) |
 | `weekly_charge_force_hours` | `174` | Hours without bypass before forcing `charge` mode |
-| `dry_run` | `true` | `true` = shadow, `false` = live (must match `ZendureStateMachine`) |
+| `dry_run` | `true` | `true` = shadow, `false` = live (must match `ZendureHubMonitor`) |
 
 ---
 
-### ZendureStateMachine
+### ZendureHubMonitor
 
 Two responsibilities in one app:
 
@@ -60,7 +60,7 @@ Two responsibilities in one app:
 - `sensor.zendure_bypass_active` — 4-state diagnostic: `none` / `app_only` / `zendure_only` / `both`
 - `sensor.zendure_operation_mode` (live) / `sensor.zendure_operation_mode_shadow` (dry_run)
 
-**How to configure** (`apps.yaml` → `zendure_state_machine`)
+**How to configure** (`apps.yaml` → `zendure_hub_monitor`)
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -134,7 +134,7 @@ Mode is picked every 20 s — decision order:
 
 ## Shadow mode
 
-`dry_run: true` (default in `apps.yaml`) routes all writes to `*_shadow` sensors and `shadow/<topic>` MQTT. Safe to run alongside a legacy script for comparison. Flip `dry_run: false` on **both** `zendure_setpoint` and `zendure_state_machine` to go live.
+`dry_run: true` (default in `apps.yaml`) routes all writes to `*_shadow` sensors and `shadow/<topic>` MQTT. Safe to run alongside a legacy script for comparison. Flip `dry_run: false` on **both** `zendure_setpoint` and `zendure_hub_monitor` to go live.
 
 `dry_run` lives only in `apps.yaml`, not in a HA toggle, so it cannot be flipped from a dashboard by accident.
 

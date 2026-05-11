@@ -45,9 +45,9 @@ energy_meter_totals:
   #   HM-1500 original replaced: 134.176 kWh
   legacy_kwh_offset: 141.290
 
-zendure_state_machine:
-  module: ZendureStateMachine
-  class: ZendureStateMachine
+zendure_hub_monitor:
+  module: ZendureHubMonitor
+  class: ZendureHubMonitor
   mqtt_topic_write: "iot/73bkTV/SE7546CU/properties/write"
   dry_run: false                       # see zendure_setpoint.dry_run
   power_inputs: *power_inputs          # YAML anchor: same sensors as the setpoint app
