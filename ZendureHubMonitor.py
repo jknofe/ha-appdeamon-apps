@@ -6,12 +6,12 @@ Two responsibilities:
      Detect when the battery has fully cycled (electric_level == 100,
      packstate == 'idle', outputpackpower == 0, solar passing through).
      Debounce 60 s, then latch the timestamp into
-     sensor.zendure_bypass_reached_at — ZendureSetpoint reads this to
+     sensor.zendure_bypass_reached_at - ZendureSetpoint reads this to
      decide the post-bypass deep-drain window and the weekly force-charge.
 
   2. One-time firmware init (5 s after start):
      Send {minSoc, passMode, outputLimit:0} so the firmware-side hard
-     floor is at 10 %. The setpoint loop enforces the higher 10–20 %
+     floor is at 10 %. The setpoint loop enforces the higher 10-20 %
      soft floor via outputLimit.
 
 Plus a 4-state diagnostic sensor.zendure_bypass_active that exposes our
@@ -57,9 +57,9 @@ class ZendureHubMonitor(hass.Hass):
         self.solar_threshold_w          = bypass.get("solar_threshold_w", 50)
         self.fallback_days_when_missing = bypass.get("fallback_days_when_missing", 7)
         fw = a.get("firmware_init", {})
-        self.init_min_soc               = fw.get("min_soc", 10)    # % — multiplied ×10 before sending
+        self.init_min_soc               = fw.get("min_soc", 10)    # % - multiplied ×10 before sending
         self.init_pass_mode             = fw.get("pass_mode", 0)   # normal
-        # dry_run is config-only — see ZendureSetpoint.
+        # dry_run is config-only - see ZendureSetpoint.
         self.dry_run                    = bool(a.get("dry_run", True))
         # Only the DC solar input is configurable here (used in the bypass
         # predicate). The other listen_state inputs come from the Zendure
@@ -174,7 +174,7 @@ class ZendureHubMonitor(hass.Hass):
 
     def _send_firmware_init(self, kwargs):
         """Set the firmware's persistent minSoc + passMode once. minSoc is
-        the hard discharge floor — keep it at the lowest meaningful value
+        the hard discharge floor - keep it at the lowest meaningful value
         (10 %) and let the setpoint loop enforce the higher soft floor.
         outputLimit:0 puts the inverter in a safe state until the setpoint
         loop's first tick."""

@@ -127,7 +127,7 @@ class PowerMeter(hass.Hass):
                 "sensor.power_export": (power_exp, "Power Export"),
                 "sensor.power_solargen": (self.power_solar, "Power Solar Generation"),
             }
-            # Update sensors — use explicit attributes dict and string state
+            # Update sensors - use explicit attributes dict and string state
             for sensor_id, (state, friendly_name) in ha_sensor_mapping.items():
                 self.set_state(
                     sensor_id,

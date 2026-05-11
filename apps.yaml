@@ -27,14 +27,14 @@ zendure_setpoint:
     solar_primary_power:   "sensor.zendure_mqtt_outputhomepower"
     solar_secondary_power: "sensor.hm_400_power"
     solar_input_power:     "sensor.zendure_mqtt_solarinputpower"
-  max_cap: 720                         # W — outputLimit cap
-  power_step: 30                       # W — quantization step
+  max_cap: 720                         # W - outputLimit cap
+  power_step: 30                       # W - quantization step
   power_target_bias_steps: 0.5         # half-step under-supply (small grid-import bias)
-  batt_floor_after_bypass: 10          # %  — discharge floor inside the 10 h post-bypass window
-  batt_floor_default: 20               # %  — discharge floor outside the post-bypass window
-  soc_promote_to_free: 30              # %  — SoC at/above which we commit to drain for the cycle
-  solar_threshold_w: 100               # W  — solar input above this counts as "real daytime"
-  weekly_charge_force_hours: 174       # h  — without a confirmed bypass forces 'charge'
+  batt_floor_after_bypass: 10          # %  - discharge floor inside the 10 h post-bypass window
+  batt_floor_default: 20               # %  - discharge floor outside the post-bypass window
+  soc_promote_to_free: 30              # %  - SoC at/above which we commit to drain for the cycle
+  solar_threshold_w: 100               # W  - solar input above this counts as "real daytime"
+  weekly_charge_force_hours: 174       # h  - without a confirmed bypass forces 'charge'
 
 energy_meter_totals:
   module: EnergyMeterTotals
@@ -59,5 +59,5 @@ zendure_hub_monitor:
     solar_threshold_w: 50              # solar must exceed this for the predicate (strict >)
     fallback_days_when_missing: 7      # bootstrap timestamp when sensor is missing/unparseable
   firmware_init:
-    min_soc: 10                        # % — app multiplies ×10 before sending to Zendure
+    min_soc: 10                        # % - app multiplies ×10 before sending to Zendure
     pass_mode: 0                       # 0 = normal operation
