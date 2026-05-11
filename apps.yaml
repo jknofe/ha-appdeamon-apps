@@ -2,9 +2,11 @@
 hello_world:
   module: Hello
   class: HelloWorld
+
 power_meter:
   module: PowerMeter
   class: PowerMeter
+
 zendure_setpoint:
   module: ZendureSetpoint
   class: ZendureSetpoint
@@ -33,6 +35,7 @@ zendure_setpoint:
   soc_promote_to_free: 30              # %  — SoC at/above which we commit to drain for the cycle
   solar_threshold_w: 100               # W  — solar input above this counts as "real daytime"
   weekly_charge_force_hours: 174       # h  — without a confirmed bypass forces 'charge'
+
 energy_meter_totals:
   module: EnergyMeterTotals
   class: EnergyMeterTotals
