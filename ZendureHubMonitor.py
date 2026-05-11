@@ -57,7 +57,7 @@ class ZendureHubMonitor(hass.Hass):
         self.solar_threshold_w          = bypass.get("solar_threshold_w", 50)
         self.fallback_days_when_missing = bypass.get("fallback_days_when_missing", 7)
         fw = a.get("firmware_init", {})
-        self.init_min_soc               = fw.get("min_soc", 100)   # 10 % (Zendure stores ×10)
+        self.init_min_soc               = fw.get("min_soc", 10)    # % — multiplied ×10 before sending
         self.init_pass_mode             = fw.get("pass_mode", 0)   # normal
         # dry_run is config-only — see ZendureSetpoint.
         self.dry_run                    = bool(a.get("dry_run", True))
@@ -179,7 +179,7 @@ class ZendureHubMonitor(hass.Hass):
         outputLimit:0 puts the inverter in a safe state until the setpoint
         loop's first tick."""
         payload = {"properties": {
-            "minSoc": self.init_min_soc,
+            "minSoc": self.init_min_soc * 10,
             "passMode": self.init_pass_mode,
             "outputLimit": 0,
         }}

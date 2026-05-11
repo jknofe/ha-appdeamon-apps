@@ -56,5 +56,5 @@ zendure_hub_monitor:
     solar_threshold_w: 50              # solar must exceed this for the predicate (strict >)
     fallback_days_when_missing: 7      # bootstrap timestamp when sensor is missing/unparseable
   firmware_init:
-    min_soc: 100                       # 10 % × 10 (Zendure stores minSoc ×10)
+    min_soc: 10                        # % — app multiplies ×10 before sending to Zendure
     pass_mode: 0                       # 0 = normal operation

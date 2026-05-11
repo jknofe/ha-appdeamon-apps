@@ -67,7 +67,7 @@ Two responsibilities in one app:
 | `bypass_tracker.debounce_seconds` | `60` | Hold time before latching timestamp |
 | `bypass_tracker.solar_threshold_w` | `50` | Min solar input for bypass predicate (W) |
 | `bypass_tracker.fallback_days_when_missing` | `7` | Bootstrap age when sensor is missing |
-| `firmware_init.min_soc` | `100` | minSoc × 10 sent to firmware (= 10 %) |
+| `firmware_init.min_soc` | `10` | Hard discharge floor (%) — multiplied ×10 by the app before sending |
 | `firmware_init.pass_mode` | `0` | passMode sent to firmware (0 = normal) |
 | `dry_run` | `true` | Must match `zendure_setpoint.dry_run` |
 
