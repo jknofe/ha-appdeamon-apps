@@ -33,6 +33,18 @@ zendure_setpoint:
   soc_promote_to_free: 30              # %  — SoC at/above which we commit to drain for the cycle
   solar_threshold_w: 100               # W  — solar input above this counts as "real daytime"
   weekly_charge_force_hours: 174       # h  — without a confirmed bypass forces 'charge'
+energy_meter_totals:
+  module: EnergyMeterTotals
+  class: EnergyMeterTotals
+  update_interval: "5m"
+  sensors:
+    - sensor.hm_400_yieldtotal       # HM-400 (active)
+    - sensor.hm_1500_yieldtotal_2    # HM-1500 current unit (active)
+  # Fixed kWh accumulated by decommissioned inverters:
+  #   HM-700 retired:            7.114 kWh
+  #   HM-1500 original replaced: 134.176 kWh
+  legacy_kwh_offset: 141.290
+
 zendure_state_machine:
   module: ZendureStateMachine
   class: ZendureStateMachine
