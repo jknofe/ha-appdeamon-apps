@@ -12,7 +12,7 @@ so coverage is traceable.
 
 Two AppDaemon apps replace `python_script.zendure_setpoint` and
 `python_script.zendure_state_machine`. A third concern — bypass detection —
-is hosted inside `ZendureStateMachine` and replaces both
+is hosted inside `ZendureHubMonitor` and replaces both
 `automation.zendure_bypass_reached` and `sensor.zendure_mqtt_bypass`.
 
 Out of scope: decoder/battery-state stubs, the legacy `power_*.py` (covered by
@@ -92,7 +92,7 @@ Out of scope: decoder/battery-state stubs, the legacy `power_*.py` (covered by
 - **SP-12** Setpoint written to `sensor.zendure_setpoint` (live) or `sensor.zendure_setpoint_shadow` (shadow), state formatted as `repr(round(setpoint, 0))` to match the original byte-for-byte. Attributes: `state_class: measurement`, `unit_of_measurement: W`, `device_class: power`, `friendly_name: 'Zendure Setpoint' / 'Zendure Setpoint (shadow)'`. Write is skipped when the target entity already holds the same state string — avoids generating an HA state-changed event every 20 s for a stable setpoint.
 - **SP-13** MQTT publish to `mqtt_topic_write` with `{"properties": {"outputLimit": <int>}}` only when `setpoint != setpoint_old` (in-memory tracker; bootstrapped from `sensor.zendure_setpoint` on first cycle).
 
-## 5. `ZendureStateMachine` requirements
+## 5. `ZendureHubMonitor` requirements
 
 ### Cadence and lifecycle
 - **SM-1** Runs every `update_interval`, default `"20min"`.
@@ -138,7 +138,7 @@ Out of scope: decoder/battery-state stubs, the legacy `power_*.py` (covered by
 ## 6. Bypass tracker requirements
 
 ### Setup
-- **BT-1** Hosted inside `ZendureStateMachine.initialize()`.
+- **BT-1** Hosted inside `ZendureHubMonitor.initialize()`.
 - **BT-2** Bootstrap: read `sensor.zendure_bypass_reached_at`. If parseable ISO timestamp → no-op (the sensor itself is the source of truth, re-read each tick by `_hours_since_last_bypass`). If missing/`unknown`/`unavailable`/unparseable → write `self.datetime() − fallback_days_when_missing` to the sensor so it materializes from t=0 and downstream calculations have something to subtract from.
 - **BT-3** All timestamp writes use `self.datetime().isoformat()` with attributes `{'device_class': 'timestamp', 'friendly_name': 'Zendure Bypass Reached At'}`.
 

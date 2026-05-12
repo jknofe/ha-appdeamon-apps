@@ -48,7 +48,7 @@ def parse_interval(value):
 def next_aligned_minute(now, interval_min):
     """Next datetime strictly after `now` whose minute is a multiple of `interval_min`.
 
-    Useful for anchoring run_every schedules to clock boundaries — e.g. with
+    Useful for anchoring run_every schedules to clock boundaries - e.g. with
     interval_min=20 the result is one of :00, :20, :40 every hour.
 
     `interval_min` must be in [1, 60] and divide 60 evenly so the boundaries

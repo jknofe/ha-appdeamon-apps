@@ -4,7 +4,7 @@ Ordered checklist. Implementation only starts after this list is agreed. Compani
 
 **Layout reminder** (per `WORKING-STYLE.md`):
 - Pure logic → `zendure_logic.py` (no AppDaemon import; tested with `pytest`)
-- AppDaemon glue → `ZendureSetpoint.py`, `ZendureStateMachine.py` (read state, call logic, write state/MQTT)
+- AppDaemon glue → `ZendureSetpoint.py`, `ZendureHubMonitor.py` (read state, call logic, write state/MQTT)
 - Tests → `tests/`
 
 ## Phase 0 — Prep (no code yet)
@@ -28,7 +28,7 @@ Ordered checklist. Implementation only starts after this list is agreed. Compani
 - [x] Add `.gitignore` for `.venv/`, `__pycache__/`, `.pytest_cache/`
 - [x] Verify `.venv/bin/pytest tests/` collects 36 tests (all failing `NotImplementedError`)
 
-## Phase 3 — `ZendureStateMachine` (port first, includes bypass tracker)
+## Phase 3 — `ZendureHubMonitor` (port first, includes bypass tracker)
 
 ### 3a. Pure logic in `zendure_logic.py` + tests
 - [x] Add `is_bypass_active(electric_level, packstate, outputpackpower, solarinputpower, solar_threshold)` — returns bool
@@ -48,8 +48,8 @@ Ordered checklist. Implementation only starts after this list is agreed. Compani
 - [x] Test: no mode change and not bypass → None, None
 - [x] Test: `old_mode` in {None, 'unknown', 'unavailable'} → treated as same-as-new_mode (no transition payload)
 
-### 3b. AppDaemon glue (`ZendureStateMachine.py`)
-- [x] Add `zendure_state_machine` block to `apps.yaml` per knowledgebase
+### 3b. AppDaemon glue (`ZendureHubMonitor.py`)
+- [x] Add `zendure_hub_monitor` block to `apps.yaml` per knowledgebase
 - [x] Skeleton: `initialize()`, `run_every` for 20 min cadence + run-on-start
 - [x] Helper `_get_state_int(entity, default)` mirroring original
 - [ ] Helper `_helper_or_default(helper_id, yaml_key)` for hybrid config — N/A for state machine (no HA helpers needed); implemented in setpoint
@@ -117,7 +117,7 @@ Ordered checklist. Implementation only starts after this list is agreed. Compani
 
 ## Phase 7 — Cleanup (minimal — backlog the rest)
 
-- [ ] Archive or remove `zendure_setpoint.py`, `zendure_state_machine.py`, `zendure_state_decoder.py`, `zendure_battery_state.py` from `zendure-solarflow-control/`
+- [ ] Archive or remove `zendure_setpoint.py`, `zendure_hub_monitor.py`, `zendure_state_decoder.py`, `zendure_battery_state.py` from `zendure-solarflow-control/`
 - [ ] Remove the dumb "battery 100 % long enough" HA automation (replaced by AppDaemon bypass tracker)
 
 ## Backlog (not part of this migration)
@@ -126,7 +126,7 @@ Ordered checklist. Implementation only starts after this list is agreed. Compani
 - Remove obsolete `power_consumption.py` / `power_solargen.py` / `engery_meter_totals.py` from HA (covered by `PowerMeter.py`)
 - Remove `*_shadow` sensors after a week of stable live operation
 - Delete stale HA entities `zendure.operation_mode_msg`, `zendure.hours_since_last_bypass`, `zendure.batt_low_stop`, `zendure.battery_discharged`, `sensor.zendure_mqtt_bypass`
-- Wire `input_select.zendure_operation_mode_strategy` into `ZendureStateMachine` for manual override (force-serve / force-charge / etc.)
+- Wire `input_select.zendure_operation_mode_strategy` into `ZendureHubMonitor` for manual override (force-serve / force-charge / etc.)
 - Decide whether to promote the `dual` half-power tunables (`dual_mode_max_power`, `dual_mode_solar_margin`) and `power_target_bias_steps` from `apps.yaml` to live HA helpers
 - Re-tune bypass tracker thresholds (`debounce_seconds = 60`, `solar_threshold_w = 50`) based on observed history
 - **State-transition logging (one-line INFO per flip, no per-tick noise).** Track previous-value in memory; emit only on change. Targets:
@@ -145,7 +145,7 @@ Ordered checklist. Implementation only starts after this list is agreed. Compani
 
 ## Done criteria
 
-- AppDaemon `ZendureSetpoint` and `ZendureStateMachine` are the sole writers of `sensor.zendure_setpoint` and `zendure.operation_mode`.
+- AppDaemon `ZendureSetpoint` and `ZendureHubMonitor` are the sole writers of `sensor.zendure_setpoint` and `zendure.operation_mode`.
 - `sensor.zendure_bypass_reached_at` is the canonical bypass-time source, updated by the AppDaemon tracker.
 - No Zendure-related `python_script.*` runs in HA.
 - Re-enabling `input_boolean.zendure_dry_run` cleanly stops MQTT writes (panic switch verified).
