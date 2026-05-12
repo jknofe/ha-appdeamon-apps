@@ -5,6 +5,9 @@ Captures *why* the apps look the way they do, in current state. Day-to-day
 mechanics live in `zendure-requirements.md` (testable spec), `WORKING-STYLE.md`
 (conventions), and the source files themselves.
 
+**Migration status: complete.** All legacy `python_script.*` automations and
+scripts have been removed from HA. AppDaemon apps are the sole control path.
+
 ## Goal
 
 Move the existing `python_script.zendure_*` control loop into AppDaemon, next
@@ -25,7 +28,7 @@ Out of scope:
 - `zendure_state_decoder.py` — already redundant; HA YAML decodes `packState`.
 - `zendure_battery_state.py` — stub.
 - `power_*.py` — superseded by `PowerMeter.py`.
-- `configuration_mqtt_sensors.yaml` — stays in HA, AppDaemon reads `sensor.zendure_mqtt_*`.
+- `configuration_mqtt_sensors.yaml` — moved to `/config/zendure_mqtt_sensors.yaml`; included via `mqtt: !include zendure_mqtt_sensors.yaml`. AppDaemon reads the resulting `sensor.zendure_mqtt_*` entities.
 - `input_select.zendure_operation_mode_strategy` — future manual-override feature.
 
 ## Design decisions
@@ -201,10 +204,42 @@ Ports `engery_meter_totals.py` from `zendure-solarflow-control`; legacy constant
 
 A separate diagnostic sensor `sensor.zendure_bypass_active` is updated on every input change AND on every `sensor.zendure_mqtt_bypass` change, exposing the 4-state agreement (`none` / `app_only` / `zendure_only` / `both`). Written only when the state flips, so HA history stays clean.
 
+## HA configuration state (post-migration)
+
+### What was removed (2026-05-12)
+
+All legacy control scripts and their triggering automations were deleted from the HA host.
+Backups are in `/config/.backup_conf/`.
+
+**`/config/python_scripts/` - deleted entirely.** Contained:
+- `zendure_setpoint.py`, `zendure_state_machine.py` - replaced by AppDaemon apps
+- `power_import_export.py`, `power_consumption.py`, `power_solargen.py` - replaced by `PowerMeter`
+- `engery_meter_totals.py` - replaced by `EnergyMeterTotals`
+- `zendure_state_decoder.py`, `zendure_battery_state.py`, `get_state.py` - dead stubs
+- `automations.yaml` - all 8 entries deleted (see below)
+
+**Automations removed from `python_scripts/automations.yaml` (whole file deleted):**
+`Zendure Setpoint Update`, `Power_Import_Export_Python`, `Power_Consumption_Python`,
+`Power_Solargen_Python`, `Engery_Meter_Totals`, `Zendure Charge Start`,
+`Zendure System State Machine`, `Zendure Bypass Reached`
+
+**Automation removed from `automations.yaml`:**
+`Zendure Low Stop` (id 1715005016756) - empty action, was always a no-op.
+
+**Lines removed from `configuration.yaml`:**
+- `python_script:` - no longer needed
+- `automation split: !include python_scripts/automations.yaml` - file is gone
+
+### What moved
+
+`python_scripts/configuration_mqtt_sensors.yaml` -> `/config/zendure_mqtt_sensors.yaml`.
+Include path in `configuration.yaml` updated accordingly.
+This file defines all `sensor.zendure_mqtt_*` entities that AppDaemon reads - keep it.
+
 ## Risk notes / parking lot
 
 - **`time.sleep` is forbidden.** The original mode-change `getAll → wait 5 s → publish` is implemented as `run_in(_send_mode_payload, 5)`.
-- **Bypass tracker may not fire in real life until conditions actually align** (battery 100 % AND idle AND outputpackpower 0 AND solar > 50 W for ≥ 60 s). Until that happens, `sensor.zendure_bypass_reached_at` stays at the 7-day fallback set on bootstrap. Once 7 days from bootstrap pass, `force_weekly_charge` (SM-20) starts firing every tick, producing a spurious `→ charge` divergence from production (which has its own `last_triggered` source). Resolves itself the first time the predicate trips for real; until then, expect the shadow to disagree with live during `dual` hours.
+- **Bypass tracker may not fire in real life until conditions actually align** (battery 100 % AND idle AND outputpackpower 0 AND solar > 50 W for >= 60 s). Until that happens, `sensor.zendure_bypass_reached_at` stays at the 7-day fallback set on bootstrap. Once 7 days from bootstrap pass without a confirmed bypass, `force_weekly_charge` fires and keeps the system in `charge` mode until the next real bypass. Resolves itself the first time the predicate trips for real.
 - **`tests/` and `tools/` require `exclude_dirs` on the HA host.** AppDaemon's hot-reload watcher tries to import every modified `.py` under `app_dir` even from subdirectories. Add to `/config/appdaemon.yaml`:
   ```yaml
   appdaemon:
