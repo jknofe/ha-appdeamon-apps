@@ -90,7 +90,7 @@ def print_setpoint_diff(by_entity):
 
 def print_mode_timeline(by_entity):
     section("Mode timeline (transitions only)")
-    for label, e in (("live  ", "zendure.operation_mode"),
+    for label, e in (("live  ", "sensor.zendure_operation_mode"),
                      ("shadow", "sensor.zendure_operation_mode_shadow")):
         rows = by_entity.get(e, [])
         print(f"  {label} ({e}):")

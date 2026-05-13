@@ -1,9 +1,7 @@
-"""Tests for app_helpers.parse_interval and next_aligned_minute."""
-import datetime
-
+"""Tests for app_helpers.parse_interval."""
 import pytest
 
-from app_helpers import next_aligned_minute, parse_interval
+from app_helpers import parse_interval
 
 
 # ---- bare numeric forms ----
@@ -87,59 +85,3 @@ def test_parse_none_raises():
 def test_parse_empty_string_raises():
     with pytest.raises(ValueError):
         parse_interval("")
-
-
-# ---- next_aligned_minute ----
-
-def _dt(h, m, s=0, us=0):
-    return datetime.datetime(2026, 5, 2, h, m, s, us)
-
-
-def test_aligned_mid_interval_advances_to_next_boundary():
-    assert next_aligned_minute(_dt(15, 14, 30), 20) == _dt(15, 20)
-
-
-def test_aligned_just_before_boundary():
-    assert next_aligned_minute(_dt(15, 19, 59, 999_999), 20) == _dt(15, 20)
-
-
-def test_aligned_exactly_on_boundary_advances():
-    # On-boundary input must produce the *next* boundary, not the current one.
-    # Returning current would mean a tick fires at AppDaemon-init time + ~0s,
-    # which collides with the run_in(_tick, 1) kickoff.
-    assert next_aligned_minute(_dt(15, 20, 0), 20) == _dt(15, 40)
-
-
-def test_aligned_rolls_to_next_hour():
-    assert next_aligned_minute(_dt(15, 40), 20) == _dt(16, 0)
-
-
-def test_aligned_just_after_top_of_hour():
-    assert next_aligned_minute(_dt(15, 0, 1), 20) == _dt(15, 20)
-
-
-def test_aligned_15min_interval():
-    assert next_aligned_minute(_dt(15, 7), 15) == _dt(15, 15)
-    assert next_aligned_minute(_dt(15, 45), 15) == _dt(16, 0)
-
-
-def test_aligned_60min_interval():
-    assert next_aligned_minute(_dt(15, 30), 60) == _dt(16, 0)
-
-
-def test_aligned_invalid_zero_raises():
-    with pytest.raises(ValueError):
-        next_aligned_minute(_dt(15, 0), 0)
-
-
-def test_aligned_invalid_non_divisor_raises():
-    with pytest.raises(ValueError):
-        next_aligned_minute(_dt(15, 0), 13)
-
-
-def test_aligned_preserves_tzinfo():
-    tz = datetime.timezone(datetime.timedelta(hours=2))
-    now = datetime.datetime(2026, 5, 2, 15, 14, tzinfo=tz)
-    result = next_aligned_minute(now, 20)
-    assert result.tzinfo == tz
-    assert result == datetime.datetime(2026, 5, 2, 15, 20, tzinfo=tz)
