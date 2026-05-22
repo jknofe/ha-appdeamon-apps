@@ -148,12 +148,12 @@ zendure_hub_monitor:
 1. `initialize()` bootstraps `sensor.zendure_bypass_reached_at` if missing/unparseable. Initializes `_bypass_active = False`. After wiring listeners, kicks the state-machine entry once to catch a bypass already in progress at startup.
 2. `listen_state` on four predicate inputs. On any change: evaluate `is_bypass_active`. If result disagrees with `_bypass_active` and no timer pending -> start 60 s `_confirm_transition` timer. If result agrees with `_bypass_active` (predicate flapped back to latched state) and timer pending -> cancel.
 3. After 60 s debounce, `_confirm_transition` re-evaluates and acts on the transition direction:
-   - latch False -> True: write `now()`, log INFO `Bypass started at <iso>`
-   - latch True -> False: write `now()`, log INFO `Bypass ended at <iso>`
+   - latch False -> True: write `now()` to `sensor.zendure_bypass_reached_at`, log INFO `Bypass started at <iso>`
+   - latch True -> False: log INFO `Bypass ended at <iso>`. NO timestamp write -- the sensor advances exactly once per bypass cycle, on the start
    - predicate flipped back during debounce: no log, no write
 4. Maintain `sensor.zendure_bypass_active` (4-state diagnostic) on every predicate-input or `sensor.zendure_mqtt_bypass` change. Write only on flip.
 
-**Why the latch / why two logs per cycle** -- the previous implementation cleared `_pending_handle` inside `_confirm_bypass` without latching, so any subsequent input change while the predicate was still True started a fresh 60 s timer and logged again. Long sunny bypasses produced one INFO every ~60 s for hours (e.g. ~150 lines over a 3 h bypass on 2026-05-22). The latch makes "in bypass" a sticky state - one start log when we enter, one end log when we leave, silent in between.
+**Why the latch / why two logs but one timestamp write** -- the previous implementation cleared `_pending_handle` inside `_confirm_bypass` without latching, so any subsequent input change while the predicate was still True started a fresh 60 s timer, re-confirmed, re-logged INFO, AND re-wrote `sensor.zendure_bypass_reached_at`. Long sunny bypasses produced one INFO + one recorder write every ~60 s for hours (e.g. ~150 lines / 150 timestamp updates over a 3 h bypass on 2026-05-22). The latch makes "in bypass" a sticky state: one start log + one timestamp write when we enter, one end log when we leave, silent in between. The timestamp is intentionally NOT rewritten on the end transition so the sensor advances once per cycle, matching its literal name ("reached at") and avoiding recorder churn.
 
 **Firmware init** (once, 5 s after start):
 - Publish `{minSoc: 100, passMode: 0, outputLimit: 0}` to the write topic (or `shadow/...` in dry_run). Sets the firmware hard floor at 10 %; `ZendureSetpoint` enforces the higher soft floor via `outputLimit`.

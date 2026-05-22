@@ -5,15 +5,15 @@ Two responsibilities:
   1. Bypass tracker (event-driven via listen_state):
      Detect when the battery has fully cycled (electric_level == 100,
      packstate == 'idle', outputpackpower == 0, solar passing through).
-     Debounce 60 s on BOTH start and end transitions, then latch the
-     timestamp into sensor.zendure_bypass_reached_at - ZendureSetpoint
-     reads this to decide the post-bypass deep-drain window and the
-     weekly force-charge. While bypass is latched active, repeated True
-     evaluations are silent (no log, no timer rearm) - prevents the log
-     spam that happens during long continuous bypass periods when input
-     sensors keep ticking. One INFO log on confirmed start, one on
-     confirmed end. Both transitions also rewrite the timestamp, so
-     hours_since_bypass stays near 0 throughout an active bypass.
+     Debounce 60 s on BOTH start and end transitions. On a confirmed
+     start, latch _bypass_active, write the timestamp to
+     sensor.zendure_bypass_reached_at, log INFO. On a confirmed end,
+     clear the latch and log INFO - the timestamp is NOT rewritten,
+     so it advances exactly once per bypass cycle (matches the sensor
+     name "reached_at" = when bypass was entered). While the latch is
+     active, repeated True evaluations are silent (no log, no timer
+     rearm, no sensor write). ZendureSetpoint reads the timestamp for
+     the post-bypass deep-drain window and the weekly force-charge.
 
   2. One-time firmware init (5 s after start):
      Send {minSoc, passMode, outputLimit:0} so the firmware-side hard
@@ -156,8 +156,11 @@ class ZendureHubMonitor(hass.Hass):
         self._update_bypass_status_sensor()
 
     def _confirm_transition(self, kwargs):
-        """Debounce callback for both start and end. Latches `_bypass_active`,
-        rewrites the timestamp, and logs INFO only on the actual transition."""
+        """Debounce callback for both start and end. Latches `_bypass_active`
+        and logs INFO on the transition. Only the START transition writes
+        sensor.zendure_bypass_reached_at - the timestamp marks when bypass
+        was *reached* (entered), so it advances exactly once per bypass
+        cycle. The END transition is log-only."""
         self._pending_handle = None
         pred = self._evaluate_predicate()
         if pred and not self._bypass_active:
@@ -166,10 +169,8 @@ class ZendureHubMonitor(hass.Hass):
             self._write_bypass_sensor(now)
             self.log(f"Bypass started at {now.isoformat()}")
         elif not pred and self._bypass_active:
-            now = self.datetime()
             self._bypass_active = False
-            self._write_bypass_sensor(now)
-            self.log(f"Bypass ended at {now.isoformat()}")
+            self.log(f"Bypass ended at {self.datetime().isoformat()}")
 
     def _evaluate_predicate(self):
         return is_bypass_active(
