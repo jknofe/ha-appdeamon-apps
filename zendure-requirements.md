@@ -105,9 +105,10 @@ Out of scope: `zendure_state_decoder.py`, `zendure_battery_state.py`, `power_*.p
 ### Bypass predicate (pure function `is_bypass_active`)
 - **BT-4** `soc == 100 AND packstate == 'idle' AND outputpackpower == 0 AND solarinputpower > solar_threshold_w`. Strict `>` on solar: irradiance noise near the threshold would cause false triggers with `>=`.
 
-### Debounce loop
-- **BT-5** `listen_state` registered on: `sensor.zendure_mqtt_electriclevel`, `sensor.zendure_mqtt_packstate`, `sensor.zendure_mqtt_outputpackpower`, `solar_input_power_sensor` (configurable). On any change: re-evaluate predicate. If True and no timer pending -> `self._pending_handle = self.run_in(_confirm_bypass, debounce_seconds)`. If False and timer pending -> `cancel_timer`, clear handle.
-- **BT-6** `_confirm_bypass`: clear handle, re-evaluate predicate. If still True -> write `now()` to `sensor.zendure_bypass_reached_at` and log INFO. No in-memory cache -- next read comes from the sensor.
+### Debounce loop (latched state machine)
+- **BT-5** In-memory latch `_bypass_active` (False on init). `listen_state` registered on: `sensor.zendure_mqtt_electriclevel`, `sensor.zendure_mqtt_packstate`, `sensor.zendure_mqtt_outputpackpower`, `solar_input_power_sensor` (configurable). On any change: re-evaluate predicate. If predicate disagrees with `_bypass_active` and no timer pending -> `self._pending_handle = self.run_in(_confirm_transition, debounce_seconds)`. If predicate agrees with `_bypass_active` (back to latched state) and timer pending -> `cancel_timer`, clear handle. The initialize() path calls the state-machine entry once after wiring listeners so a bypass already in progress at startup is picked up without waiting for an input change.
+- **BT-6** `_confirm_transition`: clear handle, re-evaluate predicate. If predicate True and latch False -> flip latch to True, write `now()` to `sensor.zendure_bypass_reached_at`, log INFO `Bypass started at <iso>`. If predicate False and latch True -> flip latch to False, write `now()` to `sensor.zendure_bypass_reached_at`, log INFO `Bypass ended at <iso>`. Otherwise (predicate flipped back during the debounce window) -> no log, no write. No in-memory timestamp cache -- next read comes from the sensor.
+- **BT-6a** While the latch is True, repeated True evaluations from input changes neither log nor rearm the debounce timer. This is the anti-spam invariant: at most one `Bypass started` and one `Bypass ended` per bypass cycle, regardless of how many input updates arrive during the bypass.
 
 ### Diagnostic status sensor (pure function `bypass_status`)
 - **BT-7** `sensor.zendure_bypass_active` maintained by `bypass_status(app_active, zendure_active)`:
@@ -163,7 +164,7 @@ Out of scope: `zendure_state_decoder.py`, `zendure_battery_state.py`, `power_*.p
 ## 10. Logging requirements
 
 - **LOG-1** Match `PowerMeter.py` discipline: terse, mostly silent on the happy path.
-- **LOG-2** Log INFO on: app start (`<App> started`), mode transition (`Mode <old> -> <new>: <reason>`), bypass confirmed (`Bypass reached at <iso>`), firmware init sent.
+- **LOG-2** Log INFO on: app start (`<App> started`), mode transition (`Mode <old> -> <new>: <reason>`), bypass start (`Bypass started at <iso>`), bypass end (`Bypass ended at <iso>`), firmware init sent. No log during continuous bypass between start and end.
 - **LOG-3** Log WARNING on: bypass-tracker bootstrap fallback, unparseable bypass timestamp.
 - **LOG-4** Log ERROR on: MQTT publish failures, caught exceptions.
 - **LOG-5** No per-tick INFO. Setpoint must stay quiet at 20 s cadence.

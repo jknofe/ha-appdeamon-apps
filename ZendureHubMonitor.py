@@ -5,9 +5,15 @@ Two responsibilities:
   1. Bypass tracker (event-driven via listen_state):
      Detect when the battery has fully cycled (electric_level == 100,
      packstate == 'idle', outputpackpower == 0, solar passing through).
-     Debounce 60 s, then latch the timestamp into
-     sensor.zendure_bypass_reached_at - ZendureSetpoint reads this to
-     decide the post-bypass deep-drain window and the weekly force-charge.
+     Debounce 60 s on BOTH start and end transitions, then latch the
+     timestamp into sensor.zendure_bypass_reached_at - ZendureSetpoint
+     reads this to decide the post-bypass deep-drain window and the
+     weekly force-charge. While bypass is latched active, repeated True
+     evaluations are silent (no log, no timer rearm) - prevents the log
+     spam that happens during long continuous bypass periods when input
+     sensors keep ticking. One INFO log on confirmed start, one on
+     confirmed end. Both transitions also rewrite the timestamp, so
+     hours_since_bypass stays near 0 throughout an active bypass.
 
   2. One-time firmware init (5 s after start):
      Send {minSoc, passMode, outputLimit:0} so the firmware-side hard
@@ -69,6 +75,11 @@ class ZendureHubMonitor(hass.Hass):
 
         self._pending_handle = None
         self._last_bypass_status = None
+        # Latch: True once a bypass start has been debounce-confirmed,
+        # False until a bypass end is debounce-confirmed. Suppresses
+        # log spam during continuous bypass - logging fires only on
+        # transitions.
+        self._bypass_active = False
 
         self._bootstrap_bypass_timestamp()
         for entity in (
@@ -79,7 +90,9 @@ class ZendureHubMonitor(hass.Hass):
         ):
             self.listen_state(self._on_bypass_input_change, entity)
         self.listen_state(self._on_zendure_reported_change, BYPASS_REPORTED_SENSOR)
-        self._update_bypass_status_sensor()
+        # Kick the state machine once so we react if predicate is already
+        # True at startup (listen_state only fires on subsequent changes).
+        self._evaluate_and_react()
 
         # Delay 5 s so HA's MQTT integration is fully up before we publish.
         self.run_in(self._send_firmware_init, 5)
@@ -118,25 +131,45 @@ class ZendureHubMonitor(hass.Hass):
         )
 
     def _on_bypass_input_change(self, entity, attribute, old, new, kwargs):
-        """Re-evaluate predicate. Start debounce on True; cancel pending on False."""
-        if self._evaluate_predicate():
-            if self._pending_handle is None:
-                self._pending_handle = self.run_in(self._confirm_bypass, self.debounce_seconds)
-        elif self._pending_handle is not None:
-            self.cancel_timer(self._pending_handle)
-            self._pending_handle = None
-        self._update_bypass_status_sensor()
+        self._evaluate_and_react()
 
     def _on_zendure_reported_change(self, entity, attribute, old, new, kwargs):
         self._update_bypass_status_sensor()
 
-    def _confirm_bypass(self, kwargs):
-        """Debounce callback: re-check predicate; if still True, latch timestamp."""
+    def _evaluate_and_react(self):
+        """State machine: latch on confirmed bypass, log only on transitions.
+
+        Schedules a debounce timer when the predicate disagrees with the
+        latched state (either direction). If the predicate flips back to
+        the latched state before the timer fires, cancel - that filters
+        sensor flap on both edges. While latched True, repeated True
+        evaluations are silent - this is what kills the log spam during
+        long continuous bypass periods."""
+        pred = self._evaluate_predicate()
+        if pred != self._bypass_active:
+            if self._pending_handle is None:
+                self._pending_handle = self.run_in(self._confirm_transition, self.debounce_seconds)
+        else:
+            if self._pending_handle is not None:
+                self.cancel_timer(self._pending_handle)
+                self._pending_handle = None
+        self._update_bypass_status_sensor()
+
+    def _confirm_transition(self, kwargs):
+        """Debounce callback for both start and end. Latches `_bypass_active`,
+        rewrites the timestamp, and logs INFO only on the actual transition."""
         self._pending_handle = None
-        if self._evaluate_predicate():
+        pred = self._evaluate_predicate()
+        if pred and not self._bypass_active:
             now = self.datetime()
+            self._bypass_active = True
             self._write_bypass_sensor(now)
-            self.log(f"Bypass reached at {now.isoformat()}")
+            self.log(f"Bypass started at {now.isoformat()}")
+        elif not pred and self._bypass_active:
+            now = self.datetime()
+            self._bypass_active = False
+            self._write_bypass_sensor(now)
+            self.log(f"Bypass ended at {now.isoformat()}")
 
     def _evaluate_predicate(self):
         return is_bypass_active(

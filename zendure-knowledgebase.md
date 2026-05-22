@@ -42,7 +42,7 @@ Out of scope:
 | Q4 | Persistent flags stay as HA sensor entities. | Visible on dashboards, restored after HA restart via recorder DB. |
 | Q5 | `dry_run` in `apps.yaml` only -- no `input_boolean` HA helper. Default `true`. | A dashboard toggle can be flipped by accident. `apps.yaml` requires a deliberate edit + AppDaemon reload. Also hot-reload on `apps.yaml` edits makes the toggle instant without a helper. |
 | Q6 | Shadow mode: with `dry_run=true` all MQTT publishes go to `shadow/<topic>` and HA writes go to `*_shadow` sensors. Same payload, different destination. Flip `dry_run=false` on both apps to go live. | Inverter is driven every 20 s; a bug means wrong power flow. Shadow lets us observe vs. the legacy script on the live topic while the new apps write to shadow. |
-| Q7 | Bypass tracker inside `ZendureHubMonitor`, `listen_state` + 60 s debounce on `level==100 AND packstate=='idle' AND outputpackpower==0 AND solarinputpower>50 W`. Latches `sensor.zendure_bypass_reached_at`. | Replaces the unreliable `sensor.zendure_mqtt_bypass` (Zendure's self-reported `pass` flag is delayed and sometimes wrong) and the dumb "battery 100 % long enough" HA automation. Keeping it inside `ZendureHubMonitor` avoids a third app. |
+| Q7 | Bypass tracker inside `ZendureHubMonitor`, `listen_state` + 60 s symmetric debounce on `level==100 AND packstate=='idle' AND outputpackpower==0 AND solarinputpower>50 W`. In-memory `_bypass_active` latch: one INFO log + timestamp write on confirmed start, one on confirmed end, silent in between. | Replaces the unreliable `sensor.zendure_mqtt_bypass` (Zendure's self-reported `pass` flag is delayed and sometimes wrong) and the dumb "battery 100 % long enough" HA automation. Keeping it inside `ZendureHubMonitor` avoids a third app. The latch was added after observing ~150 `Bypass reached at` log lines during a single 3 h bypass on 2026-05-22 -- without it, every input-sensor tick during the bypass started a new debounce that re-confirmed and re-logged. |
 | Q8 | Three modes: `free`, `solar-only`, `charge`. No schedule, no hour-of-day logic. | The old 4-mode schedule (`dual`/`serve`/`dual-limit`/`charge` with a `{hour: mode}` config) was over-fitted to a specific day shape. The lean rewrite derives mode purely from SoC + solar + bypass recency -- it adapts to weather without any calendar config. |
 | Q9 | `charge_latch` with `LATCH_HYSTERESIS_PCT = 5 %`. Once SoC <= floor, latch sticks; releases only at SoC >= floor + 5 %. | A 1 % SoC bounce was flapping discharge on/off on the old system. Hysteresis avoids the chatter without trapping us at low SoC permanently. |
 | Q10 | `free_latch` -- daily drain commitment. Engages when SoC >= `soc_promote` (default 30 %); cleared when `charge_latch` engages. | Stops a transient mid-day SoC dip from yanking us back to `solar-only` and stranding stored energy. Once we've committed to draining for the day, we stay in `free` through minor dips. |
@@ -144,11 +144,16 @@ zendure_hub_monitor:
 
 ### ZendureHubMonitor
 
-**Bypass tracker** (event-driven):
-1. `initialize()` bootstraps `sensor.zendure_bypass_reached_at` if missing/unparseable.
-2. `listen_state` on four predicate inputs. On any change: evaluate `is_bypass_active`. If True and no debounce pending -> start 60 s timer. If False and timer pending -> cancel.
-3. After 60 s debounce: re-evaluate. If still True -> write `now()` to `sensor.zendure_bypass_reached_at` and log INFO.
+**Bypass tracker** (event-driven, latched state machine):
+1. `initialize()` bootstraps `sensor.zendure_bypass_reached_at` if missing/unparseable. Initializes `_bypass_active = False`. After wiring listeners, kicks the state-machine entry once to catch a bypass already in progress at startup.
+2. `listen_state` on four predicate inputs. On any change: evaluate `is_bypass_active`. If result disagrees with `_bypass_active` and no timer pending -> start 60 s `_confirm_transition` timer. If result agrees with `_bypass_active` (predicate flapped back to latched state) and timer pending -> cancel.
+3. After 60 s debounce, `_confirm_transition` re-evaluates and acts on the transition direction:
+   - latch False -> True: write `now()`, log INFO `Bypass started at <iso>`
+   - latch True -> False: write `now()`, log INFO `Bypass ended at <iso>`
+   - predicate flipped back during debounce: no log, no write
 4. Maintain `sensor.zendure_bypass_active` (4-state diagnostic) on every predicate-input or `sensor.zendure_mqtt_bypass` change. Write only on flip.
+
+**Why the latch / why two logs per cycle** -- the previous implementation cleared `_pending_handle` inside `_confirm_bypass` without latching, so any subsequent input change while the predicate was still True started a fresh 60 s timer and logged again. Long sunny bypasses produced one INFO every ~60 s for hours (e.g. ~150 lines over a 3 h bypass on 2026-05-22). The latch makes "in bypass" a sticky state - one start log when we enter, one end log when we leave, silent in between.
 
 **Firmware init** (once, 5 s after start):
 - Publish `{minSoc: 100, passMode: 0, outputLimit: 0}` to the write topic (or `shadow/...` in dry_run). Sets the firmware hard floor at 10 %; `ZendureSetpoint` enforces the higher soft floor via `outputLimit`.
