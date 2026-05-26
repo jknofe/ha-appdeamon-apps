@@ -31,7 +31,7 @@ import appdaemon.plugins.hass.hassapi as hass
 
 # Bump before each deploy and grep the AppDaemon log for it to confirm the
 # new file actually landed on the host (deploys are manual file copies).
-VERSION = "2026-05-26 bypass-latch"
+VERSION = "2026-05-26-1"
 
 BYPASS_REPORTED_SENSOR = "sensor.zendure_mqtt_bypass"
 

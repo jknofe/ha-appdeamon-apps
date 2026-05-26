@@ -9,6 +9,11 @@ import appdaemon.plugins.hass.hassapi as hass
 from app_helpers import parse_interval
 
 
+# Bump before each deploy and grep the AppDaemon log for it to confirm the
+# new file actually landed on the host (deploys are manual file copies).
+VERSION = "2026-05-26-1"
+
+
 class EnergyMeterTotals(hass.Hass):
 
     def initialize(self):
@@ -17,7 +22,7 @@ class EnergyMeterTotals(hass.Hass):
         self.sensors         = a.get("sensors", [])
         self.legacy_kwh      = float(a.get("legacy_kwh_offset", 0.0))
         self.run_every(self._tick, "now", self.update_interval)
-        self.log("EnergyMeterTotals started")
+        self.log(f"EnergyMeterTotals started (version: {VERSION})")
 
     def _tick(self, kwargs):
         total = self.legacy_kwh

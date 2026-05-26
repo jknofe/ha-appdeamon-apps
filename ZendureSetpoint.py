@@ -27,6 +27,10 @@ import appdaemon.plugins.hass.hassapi as hass
 from app_helpers import parse_interval
 
 
+# Bump before each deploy and grep the AppDaemon log for it to confirm the
+# new file actually landed on the host (deploys are manual file copies).
+VERSION = "2026-05-26-1"
+
 MODE_CHARGE     = 'charge'
 MODE_SOLAR_ONLY = 'solar-only'
 MODE_FREE       = 'free'
@@ -158,7 +162,7 @@ class ZendureSetpoint(hass.Hass):
         self._is_running = False
 
         self.run_every(self._tick, "now", self.update_interval)
-        self.log("ZendureSetpoint started")
+        self.log(f"ZendureSetpoint started (version: {VERSION})")
 
     def _tick(self, kwargs):
         if self._is_running:

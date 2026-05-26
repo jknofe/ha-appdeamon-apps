@@ -1,10 +1,16 @@
 import requests
 import appdaemon.plugins.hass.hassapi as hass
 
+
+# Bump before each deploy and grep the AppDaemon log for it to confirm the
+# new file actually landed on the host (deploys are manual file copies).
+VERSION = "2026-05-26-1"
+
+
 class PowerMeter(hass.Hass):
     def initialize(self):
         """Initialize the app and set up periodic polling."""
-        self.log("PowerMeter App Started!")
+        self.log(f"PowerMeter started (version: {VERSION})")
 
         # Entity IDs
         self.entity_id_garage = "sensor.fritz_dect_200_1_power"
