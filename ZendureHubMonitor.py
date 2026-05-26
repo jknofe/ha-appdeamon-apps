@@ -29,6 +29,10 @@ import json
 import appdaemon.plugins.hass.hassapi as hass
 
 
+# Bump before each deploy and grep the AppDaemon log for it to confirm the
+# new file actually landed on the host (deploys are manual file copies).
+VERSION = "2026-05-26 bypass-latch"
+
 BYPASS_REPORTED_SENSOR = "sensor.zendure_mqtt_bypass"
 
 
@@ -97,7 +101,7 @@ class ZendureHubMonitor(hass.Hass):
         # Delay 5 s so HA's MQTT integration is fully up before we publish.
         self.run_in(self._send_firmware_init, 5)
 
-        self.log("ZendureHubMonitor started")
+        self.log(f"ZendureHubMonitor started (version: {VERSION})")
 
     # ------------------------------------------------------------------
     # Bypass tracker
