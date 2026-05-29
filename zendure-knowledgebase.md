@@ -130,6 +130,40 @@ zendure_hub_monitor:
     pass_mode: 0                       # 0 = normal operation
 ```
 
+## Deployment
+
+App dir is a git checkout at `/root/addon_configs/a0d7b954_appdaemon/apps` on the
+HA host. The AppDaemon add-on bind-mounts `/root/addon_configs/a0d7b954_appdaemon/`
+into the container as `/config/`, so AppDaemon sees the same files at
+`/config/apps` and reads `/config/appdaemon.yaml`. Deploys are `git pull` at the
+host path; there is no build or sync step.
+
+**VERSION marker.** Each app logs `<AppName> started (version: <VERSION>)` at the
+top of `initialize()`. Bump the `VERSION` constant in the `.py` before each
+deploy, then `ha apps logs a0d7b954_appdaemon | grep "started (version:"` to
+confirm the new file actually loaded. Added 2026-05-26 after a deploy reached
+the right directory but the running AppDaemon process never picked up the new
+code.
+
+**Structural `apps.yaml` changes need a full add-on restart, not a hot-reload.**
+AppDaemon's watcher picks up content changes to existing modules but does NOT
+cleanly handle adding or removing an `apps.yaml` key: the old app instance keeps
+running on its in-memory bytecode, and a newly-added key (if any) gets started
+in parallel. Observed 2026-05-29 after the `zendure_state_machine` ->
+`zendure_hub_monitor` rename in 44921fd: both apps ran simultaneously for days,
+with the old one still spamming `Bypass reached at`. Fix:
+`ha apps restart a0d7b954_appdaemon`, which fully tears both down, re-parses
+`apps.yaml`, and starts the new set.
+
+**Auth uses `SUPERVISOR_TOKEN`; never hardcode a long-lived HA token in
+`appdaemon.yaml`.** Supervisor injects `SUPERVISOR_TOKEN` into the add-on
+container at every start; it is short-lived (rotates per add-on restart) and
+scoped to the add-on manifest. AppDaemon's HASS plugin reads it via
+`token: !env_var SUPERVISOR_TOKEN`. A hardcoded long-lived token was found in a
+redundant top-level `plugins:` block in `appdaemon.yaml` and removed
+2026-05-29 (revoke any such token in HA -> user profile -> Long-Lived Access
+Tokens whenever one shows up here).
+
 ## Behaviour summary
 
 ### ZendureSetpoint (every 20 s)
