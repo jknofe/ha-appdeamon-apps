@@ -52,7 +52,7 @@ Out of scope:
 | Q14 | `sensor.zendure_mqtt_outputhomepower` (Zendure-reported DC feed to HM-1500, ~5 % optimistic vs actual HM-1500 AC) is used as `solar_primary_power` for observability only -- not in the control law. | **(a) Reliability** -- Zendure MQTT keeps streaming when OpenDTU freezes. **(b) Update cadence** -- Zendure reports much faster. **(c) Not used in the control law** -- setpoint equation uses `consumption - solar_secondary` (HM-400 only), never reads HM-1500 back. The ~5 % DC-vs-AC gap does not propagate anywhere. |
 | Q15 | `sensor.zendure_bypass_reached_at` is re-read each tick, not cached at boot. `_hours_since_last_bypass` handles TZ-mismatch (naive vs aware) by coercing tzinfo. | Original code parsed the sensor once at bootstrap. If the sensor was missing, the cache was set to `now - 7 d`; roughly 7 h later `force_weekly_charge` fired and kept firing every tick because nothing updated the cache. Re-reading each tick picks up any external write immediately. |
 | Q16 | Pure functions (`effective_floor`, `update_charge_latch`, `pick_mode`, `compute_setpoint`, `is_bypass_active`, `bypass_status`) defined inline in their respective app files. No separate `zendure_logic.py` module. | The lean rewrite has so few pure functions (six total, short bodies) that a separate module adds indirection with no benefit. Tests import from the app module directly. |
-| Q17 | **Every MQTT write to the hub carries exactly one property.** `firmware_init_payloads` returns one payload per property instead of a combined dict. | The hub silently drops multi-property payloads. Confirmed 2026-07-25: `{"minSoc":100,"passMode":0,"outputLimit":0}` sent at 15:25:57 was never applied - the hub still reported the old `minSoc: 200` twenty-five minutes later, and had ignored the identical write sent the previous day - while `{"minSoc":190}` and `{"minSoc":100}` sent alone were each echoed back in ~1 s. The broker accepts the combined payload and the publish succeeds; only the hub ignores it, so nothing in the logs ever indicated a problem. Every write that had worked in this repo (`_publish_outputlimit`) happened to be single-property, which is why the bug survived the whole port. |
+| Q17 | **Every MQTT write to the hub carries exactly one property.** `firmware_init_payloads` returns one payload per property instead of a combined dict. | The hub silently drops multi-property payloads. Confirmed 2026-07-25: `{"minSoc":100,"passMode":0,"outputLimit":0}` sent at 15:25:57 was never applied - the hub still reported the old `minSoc: 200` twenty-five minutes later, and had ignored the identical write sent the previous day - while `{"minSoc":190}` and `{"minSoc":100}` sent alone were each echoed back in ~1 s. The broker accepts the combined payload and the publish succeeds; only the hub ignores it, so nothing in the logs ever indicated a problem. Every write that had worked in this repo (`_publish_outputlimit`) happened to be single-property, which is why the bug survived the whole port. **Independently corroborated**: community documentation of the Zendure MQTT protocol states writes are performed one property at a time rather than combined (see "External references" below). We arrived at this from the hardware first and found the confirmation afterwards. |
 | Q18 | `outputLimit: 0` dropped from the firmware init. | It existed to put the inverter in a safe state before the setpoint loop's first tick, but it only ever rode along in the ignored combined payload, so the hub has never actually received it. Splitting the init would have made it start applying - introducing a real discharge interruption on every restart that had never happened before. `ZendureSetpoint.run_every(..., "now", ...)` publishes a real setpoint within seconds of start, so the zero-write buys nothing. |
 | Q19 | Publish results are checked; the in-memory setpoint tracker advances only on a confirmed send. | `call_service` never raises on a failed service call. Verified against AppDaemon 4.5.13: `hassplugin.websocket_send_json` returns `{"success": bool, "ad_status": ...}` and `hassplugin.py:287` logs the failure on AppDaemon's own logger. On 2026-07-25 15:07:39 a Mosquitto restart dropped an `outputLimit` publish; the app's `except` never fired, and `_setpoint_old` advanced to a value the hub never received. Because publishing is change-gated, the app would not have resent until the computed setpoint moved on its own. |
 
@@ -66,6 +66,29 @@ Out of scope:
     silently drops multi-property writes (see Q17).
 
 In dry_run mode all publishes go to `shadow/iot/73bkTV/SE7546CU/properties/write` instead.
+
+## External references (protocol decoding)
+
+Community reverse-engineering of the Zendure MQTT protocol, cross-checked against
+our own 2026-07-25 captures. Useful when adding a new property.
+
+- <https://github.com/z-master42/solarflow/blob/main/mqtt.yaml> -- fullest property table
+- <https://tbsch.de/post/2025-06-15-zendure-solarflow-lokal-uber-mqtt-steuern/> -- writable
+  properties, scaling, and the one-property-per-write rule
+- <https://github.com/Zendure/zenSDK> -- vendor local-control SDK
+- ioBroker `zendure-solarflow` adapter and its forum threads -- `autoModel` / `smartMode`
+
+Decodings that differ from, or are absent in, our own comments:
+
+| Property | Correct decoding | Note |
+|---|---|---|
+| `passMode` | `0=Auto`, `1=Off`, `2=On` | `apps.yaml` and `README.md` call `0` "normal operation". The value we send is right; the wording is not. |
+| `minSoc` / `socSet` | percent, **x10 on write, /10 on read** | Confirms `MIN_SOC_SCALE`. `socSet: 1000` = 100 %. |
+| `remainOutTime` / `remainInputTime` | **minutes** | The observed `59940` is ~41.6 days, i.e. a sentinel for "unknown/infinite", not an estimate. Special-case it before graphing. |
+| `hubState` | `0=Standby`, `1=Shutdown` | Not an on/off flag. |
+| `packInputPower` / `outputPackPower` | charging / discharging | The HA Riemann sensors assert this direction in their names; worth re-checking if either is ever rewired. |
+| `packData[].maxVol` / `minVol` | cell volts, **/100** | Not currently decoded. |
+| `*Cycle` counters | **unknown** | No source found. Do not guess a meaning. |
 
 ## HA entities consumed
 
