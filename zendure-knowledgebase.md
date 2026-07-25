@@ -88,6 +88,7 @@ Decodings that differ from, or are absent in, our own comments:
 | `hubState` | `0=Standby`, `1=Shutdown` | Not an on/off flag. |
 | `packInputPower` / `outputPackPower` | charging / discharging | The HA Riemann sensors assert this direction in their names; worth re-checking if either is ever rewired. |
 | `packData[].maxVol` / `minVol` | cell volts, **/100** | Not currently decoded. |
+| `packData[].soh` | state of health, **/10** | Community sources call it a direct percent, but the observed value `978` only makes sense as 97.8 %. Corrected 2026-07-25 against real data. |
 | `*Cycle` counters | **unknown** | No source found. Do not guess a meaning. |
 
 ## HA entities consumed
