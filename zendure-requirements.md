@@ -90,10 +90,13 @@ Out of scope: `zendure_state_decoder.py`, `zendure_battery_state.py`, `power_*.p
 - **SP-compute-clamp** `setpoint = max(0, min(quantized, cap))`. Return as `int`.
 
 ### Outputs
-- **SP-out-setpoint** Write setpoint to `sensor.zendure_setpoint` (live) or `sensor.zendure_setpoint_shadow` (shadow). State as `repr(round(setpoint, 0))` (e.g. `"30.0"`). Attributes: `state_class: measurement`, `unit_of_measurement: W`, `device_class: power`. Skip write if entity already holds the same state string (avoids a HA state-changed event every 20 s for a stable setpoint).
+- **SP-out-setpoint** Write to `sensor.zendure_setpoint` (live) or `sensor.zendure_setpoint_shadow` (shadow) the **last confirmed** command - the in-memory tracker value, not the freshly computed setpoint - and only once a confirmed command exists (skipped while the tracker is `None`). State as `repr(round(value, 0))`; `compute_setpoint` returns an `int`, so this is `"30"`, not `"30.0"`. Attributes: `state_class: measurement`, `unit_of_measurement: W`, `device_class: power`. Skip write if the entity already holds the same state string. In the healthy path this is byte-identical to writing the computed setpoint; the two differ only while publishes are unconfirmed.
+- **SP-out-setpoint-coupling** This entity is the bootstrap source for the tracker (SP-out-mqtt), so it must never run *ahead* of what HA confirmed. Writing a computed-but-unpublished value here would launder it back into the app's belief on the next reload and recreate the desync SP-out-confirmed exists to prevent. The write therefore happens **after** the publish attempt, sourced from the tracker.
 - **SP-out-mode** Write mode string to `sensor.zendure_operation_mode` (live) or `sensor.zendure_operation_mode_shadow` (shadow). Skip write if unchanged.
 - **SP-out-discharged** Write `"True"`/`"False"` to `sensor.zendure_battery_discharged` (live) or `sensor.zendure_battery_discharged_shadow` (shadow) only when the latch value flips.
 - **SP-out-mqtt** Publish `{"properties": {"outputLimit": <int>}}` to `mqtt_topic_write` only when setpoint changed since last publish. In-memory tracker bootstrapped from `sensor.zendure_setpoint` on first cycle.
+- **SP-out-confirmed** The in-memory tracker advances **only on a confirmed publish**. `call_service` never raises on a failed service call - it returns `{"success": bool, ...}` and logs its own warning - so the return value is checked with `publish_succeeded`. An unconfirmed publish leaves the tracker untouched, so the next tick retries. Advancing on a dropped publish would desync app and hub permanently, because publishing is change-gated and would never resend.
+- **SP-out-logging** Publish failures are logged once per outage, not once per tick: `publish_log_action` returns `error` on the first failure of a run and `recovered` on the first success after it.
 
 ## 5. `ZendureHubMonitor` requirements
 
@@ -122,8 +125,15 @@ Out of scope: `zendure_state_decoder.py`, `zendure_battery_state.py`, `power_*.p
 
 ### Firmware init
 - **FI-1** `self.run_in(_send_firmware_init, 5)` called in `initialize()`. Delayed 5 s so HA's MQTT integration is fully up.
-- **FI-2** Payload: `{"properties": {"minSoc": min_soc * 10, "passMode": pass_mode, "outputLimit": 0}}`. Published once via `_publish_mqtt` (which applies dry_run routing). Sets the firmware's hard discharge floor as a last-resort safety net; `ZendureSetpoint` enforces the higher soft floor via `outputLimit`.
-- **FI-3** `min_soc` from `apps.yaml` in percent; app multiplies x10 before sending to Zendure. Config value is human-readable.
+- **FI-2** **One property per message.** `firmware_init_payloads` returns a list of single-property payloads - `{"properties": {"minSoc": min_soc * 10}}` then `{"properties": {"passMode": pass_mode}}` - each published separately via `_publish_mqtt` (which applies dry_run routing). The hub silently drops any payload carrying more than one property; a combined payload is accepted by the broker, echoed by nothing, and applied not at all. Sets the firmware's hard discharge floor as a last-resort safety net; `ZendureSetpoint` enforces the soft floor via `outputLimit`.
+- **FI-3** `min_soc` from `apps.yaml` in percent; app multiplies by `MIN_SOC_SCALE` (10) before sending. Zendure reports and accepts `minSoc` in 0.1 % units, so `200` = 20 %. Config value stays human-readable.
+- **FI-4** `outputLimit` is **not** part of the firmware init. It rode along in the old combined payload and therefore never reached the hub; `ZendureSetpoint` publishes a real setpoint within seconds of start, so a separate zero-write would only add a discharge interruption that never previously happened.
+- **FI-5** Each init publish is checked with `publish_succeeded`. A confirmed send logs `Firmware init sent: <payload>` at INFO; an unconfirmed one logs `Firmware init NOT confirmed: <payload>` at ERROR.
+
+### Hard floor vs soft floor
+- **FL-1** Two independent floors exist and both bind. The **hard floor** is the firmware's `minSoc` (FI-2), below which the hub itself refuses to discharge. The **soft floor** is `effective_floor` in `ZendureSetpoint`, enforced by commanding `outputLimit` and by the charge latch.
+- **FL-2** The soft floor must be **at or above** the hard floor to be meaningful. With `firmware_init.min_soc: 10` and `batt_floor_after_bypass: 10` / `batt_floor_default: 20`, both soft values are reachable. Confirmed 2026-07-25 by direct write: the hub accepts `minSoc: 100` (10 %), so the post-bypass deep-drain window is live, not dead code.
+- **FL-3** If the hard floor is ever raised above `batt_floor_after_bypass`, the post-bypass deep-drain window silently stops working - the hub stops discharging before the soft floor is reached. Changing one floor requires re-checking the other.
 
 ## 6. `EnergyMeterTotals` requirements
 

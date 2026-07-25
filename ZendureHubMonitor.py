@@ -16,9 +16,10 @@ Two responsibilities:
      the post-bypass deep-drain window and the weekly force-charge.
 
   2. One-time firmware init (5 s after start):
-     Send {minSoc, passMode, outputLimit:0} so the firmware-side hard
-     floor is at 10 %. The setpoint loop enforces the higher 10-20 %
-     soft floor via outputLimit.
+     Send minSoc and passMode as two separate single-property messages
+     so the firmware-side hard floor is at 10 %. The hub silently drops
+     multi-property payloads, so they must not be combined. The setpoint
+     loop enforces the soft floor via outputLimit.
 
 Plus a 4-state diagnostic sensor.zendure_bypass_active that exposes our
 predicate vs Zendure's reported `pass` flag (written only on flips).
@@ -28,12 +29,17 @@ import json
 
 import appdaemon.plugins.hass.hassapi as hass
 
+from app_helpers import publish_succeeded
+
 
 # Bump before each deploy and grep the AppDaemon log for it to confirm the
 # new file actually landed on the host (deploys are manual file copies).
-VERSION = "2026-05-26-1"
+VERSION = "2026-07-25-1"
 
 BYPASS_REPORTED_SENSOR = "sensor.zendure_mqtt_bypass"
+
+# Zendure reports and accepts minSoc in 0.1 % units: 200 = 20 %.
+MIN_SOC_SCALE = 10
 
 
 def is_bypass_active(soc, packstate, outputpackpower, solarinputpower, solar_threshold):
@@ -43,6 +49,26 @@ def is_bypass_active(soc, packstate, outputpackpower, solarinputpower, solar_thr
             and packstate == 'idle'
             and outputpackpower == 0
             and solarinputpower > solar_threshold)
+
+
+def firmware_init_payloads(min_soc_pct, pass_mode):
+    """One payload per property - the hub silently drops multi-property writes.
+
+    Confirmed 2026-07-25: a combined {minSoc, passMode, outputLimit} payload
+    was sent at 15:25:57 and never applied (the hub still reported the old
+    minSoc 25 minutes later), while the same minSoc sent on its own was echoed
+    back in ~1 s. Every write that has ever worked in this repo happened to be
+    single-property, which is why this went unnoticed.
+
+    outputLimit is deliberately not sent here. It was in the original combined
+    payload as a "safe state until the first tick", but since that payload
+    never applied, the hub has never actually seen it - and ZendureSetpoint
+    publishes a real setpoint within seconds of start anyway.
+    """
+    return [
+        {"properties": {"minSoc": min_soc_pct * MIN_SOC_SCALE}},
+        {"properties": {"passMode": pass_mode}},
+    ]
 
 
 def bypass_status(app_active, zendure_active):
@@ -211,18 +237,15 @@ class ZendureHubMonitor(hass.Hass):
     # ------------------------------------------------------------------
 
     def _send_firmware_init(self, kwargs):
-        """Set the firmware's persistent minSoc + passMode once. minSoc is
-        the hard discharge floor - keep it at the lowest meaningful value
-        (10 %) and let the setpoint loop enforce the higher soft floor.
-        outputLimit:0 puts the inverter in a safe state until the setpoint
-        loop's first tick."""
-        payload = {"properties": {
-            "minSoc": self.init_min_soc * 10,
-            "passMode": self.init_pass_mode,
-            "outputLimit": 0,
-        }}
-        self._publish_mqtt(self.mqtt_topic_write, payload)
-        self.log(f"Firmware init sent: {payload}")
+        """Set the firmware's persistent minSoc + passMode once, one property
+        per message. minSoc is the hard discharge floor - keep it at the lowest
+        meaningful value (10 %) and let the setpoint loop enforce the higher
+        soft floor."""
+        for payload in firmware_init_payloads(self.init_min_soc, self.init_pass_mode):
+            if self._publish_mqtt(self.mqtt_topic_write, payload):
+                self.log(f"Firmware init sent: {payload}")
+            else:
+                self.log(f"Firmware init NOT confirmed: {payload}", level="ERROR")
 
     # ------------------------------------------------------------------
     # Helpers
@@ -238,10 +261,13 @@ class ZendureHubMonitor(hass.Hass):
             return default
 
     def _publish_mqtt(self, topic, payload):
+        """Returns True only when HA confirms the service call."""
         payload_str = json.dumps(payload)
         if self.dry_run:
             topic = f"shadow/{topic}"
         try:
-            self.call_service("mqtt/publish", topic=topic, payload=payload_str)
+            result = self.call_service("mqtt/publish", topic=topic, payload=payload_str)
         except Exception as e:
             self.log(f"MQTT publish failed: {e}", level="ERROR")
+            return False
+        return publish_succeeded(result)

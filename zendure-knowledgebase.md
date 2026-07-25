@@ -52,13 +52,18 @@ Out of scope:
 | Q14 | `sensor.zendure_mqtt_outputhomepower` (Zendure-reported DC feed to HM-1500, ~5 % optimistic vs actual HM-1500 AC) is used as `solar_primary_power` for observability only -- not in the control law. | **(a) Reliability** -- Zendure MQTT keeps streaming when OpenDTU freezes. **(b) Update cadence** -- Zendure reports much faster. **(c) Not used in the control law** -- setpoint equation uses `consumption - solar_secondary` (HM-400 only), never reads HM-1500 back. The ~5 % DC-vs-AC gap does not propagate anywhere. |
 | Q15 | `sensor.zendure_bypass_reached_at` is re-read each tick, not cached at boot. `_hours_since_last_bypass` handles TZ-mismatch (naive vs aware) by coercing tzinfo. | Original code parsed the sensor once at bootstrap. If the sensor was missing, the cache was set to `now - 7 d`; roughly 7 h later `force_weekly_charge` fired and kept firing every tick because nothing updated the cache. Re-reading each tick picks up any external write immediately. |
 | Q16 | Pure functions (`effective_floor`, `update_charge_latch`, `pick_mode`, `compute_setpoint`, `is_bypass_active`, `bypass_status`) defined inline in their respective app files. No separate `zendure_logic.py` module. | The lean rewrite has so few pure functions (six total, short bodies) that a separate module adds indirection with no benefit. Tests import from the app module directly. |
+| Q17 | **Every MQTT write to the hub carries exactly one property.** `firmware_init_payloads` returns one payload per property instead of a combined dict. | The hub silently drops multi-property payloads. Confirmed 2026-07-25: `{"minSoc":100,"passMode":0,"outputLimit":0}` sent at 15:25:57 was never applied - the hub still reported the old `minSoc: 200` twenty-five minutes later, and had ignored the identical write sent the previous day - while `{"minSoc":190}` and `{"minSoc":100}` sent alone were each echoed back in ~1 s. The broker accepts the combined payload and the publish succeeds; only the hub ignores it, so nothing in the logs ever indicated a problem. Every write that had worked in this repo (`_publish_outputlimit`) happened to be single-property, which is why the bug survived the whole port. |
+| Q18 | `outputLimit: 0` dropped from the firmware init. | It existed to put the inverter in a safe state before the setpoint loop's first tick, but it only ever rode along in the ignored combined payload, so the hub has never actually received it. Splitting the init would have made it start applying - introducing a real discharge interruption on every restart that had never happened before. `ZendureSetpoint.run_every(..., "now", ...)` publishes a real setpoint within seconds of start, so the zero-write buys nothing. |
+| Q19 | Publish results are checked; the in-memory setpoint tracker advances only on a confirmed send. | `call_service` never raises on a failed service call. Verified against AppDaemon 4.5.13: `hassplugin.websocket_send_json` returns `{"success": bool, "ad_status": ...}` and `hassplugin.py:287` logs the failure on AppDaemon's own logger. On 2026-07-25 15:07:39 a Mosquitto restart dropped an `outputLimit` publish; the app's `except` never fired, and `_setpoint_old` advanced to a value the hub never received. Because publishing is change-gated, the app would not have resent until the computed setpoint moved on its own. |
 
 ## MQTT topics
 
 - **Read** (decoded by HA YAML): `/73bkTV/SE7546CU/properties/report`
 - **Write** (published via `mqtt/publish` service):
   - `iot/73bkTV/SE7546CU/properties/write` -- setpoint: `{"properties": {"outputLimit": <int>}}`;
-    firmware init: `{"properties": {"minSoc": <int>, "passMode": <int>, "outputLimit": 0}}`.
+    firmware init: `{"properties": {"minSoc": <int>}}` and `{"properties": {"passMode": <int>}}`
+    as two separate messages. **Never combine properties into one payload** - the hub
+    silently drops multi-property writes (see Q17).
 
 In dry_run mode all publishes go to `shadow/iot/73bkTV/SE7546CU/properties/write` instead.
 
@@ -173,7 +178,7 @@ Tokens whenever one shows up here).
 3. Update charge_latch (`update_charge_latch`): engages at SoC <= floor, releases at SoC >= floor + 5 %. On engage, clear free_latch and write `zendure_battery_discharged` sensor.
 4. Pick mode (`pick_mode`): weekly force -> charge_latch -> free_latch -> soc_promote -> solar -> fallback. Returns mode + updated free_latch + reason string.
 5. Compute setpoint (`compute_setpoint`): target = consumption - solar_secondary - bias. Quantize. Cap by mode. Clamp >= 0.
-6. Write setpoint sensor (skipped if unchanged). Write mode sensor (skipped if unchanged). Publish MQTT outputLimit (skipped if unchanged since last publish).
+6. Write mode sensor (skipped if unchanged). Publish MQTT outputLimit (skipped if unchanged since last publish); advance the in-memory tracker only if HA confirms the publish. Then write the setpoint sensor from that tracker, i.e. the last *confirmed* command - never the computed-but-unsent value, which would be read back as truth on the next reload.
 7. Log mode transitions at INFO (`Mode <old> -> <new>: <reason>`). Silent otherwise.
 
 ### ZendureHubMonitor
@@ -190,7 +195,7 @@ Tokens whenever one shows up here).
 **Why the latch / why two logs but one timestamp write** -- the previous implementation cleared `_pending_handle` inside `_confirm_bypass` without latching, so any subsequent input change while the predicate was still True started a fresh 60 s timer, re-confirmed, re-logged INFO, AND re-wrote `sensor.zendure_bypass_reached_at`. Long sunny bypasses produced one INFO + one recorder write every ~60 s for hours (e.g. ~150 lines / 150 timestamp updates over a 3 h bypass on 2026-05-22). The latch makes "in bypass" a sticky state: one start log + one timestamp write when we enter, one end log when we leave, silent in between. The timestamp is intentionally NOT rewritten on the end transition so the sensor advances once per cycle, matching its literal name ("reached at") and avoiding recorder churn.
 
 **Firmware init** (once, 5 s after start):
-- Publish `{minSoc: 100, passMode: 0, outputLimit: 0}` to the write topic (or `shadow/...` in dry_run). Sets the firmware hard floor at 10 %; `ZendureSetpoint` enforces the higher soft floor via `outputLimit`.
+- Publish `{minSoc: 100}` and `{passMode: 0}` as two separate single-property messages to the write topic (or `shadow/...` in dry_run). Sets the firmware hard floor at 10 %; `ZendureSetpoint` enforces the soft floor via `outputLimit`. `outputLimit` is deliberately not part of the init (Q18).
 
 ### EnergyMeterTotals (every 5 min)
 

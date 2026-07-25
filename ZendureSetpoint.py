@@ -24,12 +24,12 @@ import json
 
 import appdaemon.plugins.hass.hassapi as hass
 
-from app_helpers import parse_interval
+from app_helpers import parse_interval, publish_log_action, publish_succeeded
 
 
 # Bump before each deploy and grep the AppDaemon log for it to confirm the
 # new file actually landed on the host (deploys are manual file copies).
-VERSION = "2026-05-26-1"
+VERSION = "2026-07-25-1"
 
 MODE_CHARGE     = 'charge'
 MODE_SOLAR_ONLY = 'solar-only'
@@ -160,6 +160,9 @@ class ZendureSetpoint(hass.Hass):
         self._setpoint_old = self._get_state_int("sensor.zendure_setpoint", default=None)
         self._mode_old = None
         self._is_running = False
+        # True while consecutive publishes are failing - keeps a broker outage
+        # from logging once per tick.
+        self._publish_failing = False
 
         self.run_every(self._tick, "now", self.update_interval)
         self.log(f"ZendureSetpoint started (version: {VERSION})")
@@ -203,15 +206,31 @@ class ZendureSetpoint(hass.Hass):
                 self.max_cap, self.power_step, self.bias_steps,
             )
 
-            self._write_setpoint(setpoint)
             self._write_mode(mode)
             if mode != self._mode_old:
                 if self._mode_old is not None:
                     self.log(f"Mode {self._mode_old} -> {mode}: {reason}")
                 self._mode_old = mode
             if self._setpoint_old != setpoint:
-                self._publish_outputlimit(setpoint)
-                self._setpoint_old = setpoint
+                ok = self._publish_outputlimit(setpoint)
+                action, self._publish_failing = publish_log_action(ok, self._publish_failing)
+                if action == "error":
+                    self.log(f"outputLimit {setpoint} W not confirmed by HA - "
+                             f"retrying every tick until it lands", level="ERROR")
+                elif action == "recovered":
+                    self.log(f"outputLimit publishes confirmed again ({setpoint} W)")
+                if ok:
+                    # Only a confirmed send may advance our belief about the
+                    # hub. Advancing on a dropped publish would leave the app
+                    # and the hub permanently out of sync, because publishing
+                    # is change-gated and would never resend.
+                    self._setpoint_old = setpoint
+            # The sensor mirrors the last *confirmed* command, not the freshly
+            # computed one. initialize() bootstraps _setpoint_old from it, so
+            # writing an unconfirmed value here would launder it back into our
+            # belief across an AppDaemon reload and resurrect the desync.
+            if self._setpoint_old is not None:
+                self._write_setpoint(self._setpoint_old)
         except Exception as e:
             self.log(f"Error in _tick: {e}", level="ERROR")
         finally:
@@ -257,12 +276,16 @@ class ZendureSetpoint(hass.Hass):
                            attributes={"friendly_name": "Zendure Battery Discharged"})
 
     def _publish_outputlimit(self, setpoint):
+        """Returns True only when HA confirms the service call. One property
+        per message - the hub silently drops multi-property writes."""
         payload = json.dumps({"properties": {"outputLimit": setpoint}})
         topic = f"shadow/{self.mqtt_topic_write}" if self.dry_run else self.mqtt_topic_write
         try:
-            self.call_service("mqtt/publish", topic=topic, payload=payload)
+            result = self.call_service("mqtt/publish", topic=topic, payload=payload)
         except Exception as e:
             self.log(f"MQTT publish failed: {e}", level="ERROR")
+            return False
+        return publish_succeeded(result)
 
     # ------------------------------------------------------------------
     # HA reads

@@ -53,7 +53,7 @@ Runs every 20 s. Computes the `outputLimit` command for the Zendure SolarFlow hu
 Two responsibilities in one app:
 
 1. **Bypass tracker** (event-driven, `listen_state`): detects when the battery completes a full charge cycle - SoC 100 %, packstate idle, outputpackpower 0, solar above threshold - debounced 60 s, then latches the timestamp into `sensor.zendure_bypass_reached_at`. ZendureSetpoint reads this for the post-bypass deep-drain window and the weekly force-charge override.
-2. **One-time firmware init** (5 s after start): sends `minSoc`, `passMode`, `outputLimit: 0` so the Zendure firmware is in a known safe state before the setpoint loop's first tick.
+2. **One-time firmware init** (5 s after start): sends `minSoc` and `passMode` as **two separate single-property messages**. The hub silently drops any payload carrying more than one property, so the original combined write never applied. `outputLimit` is no longer part of the init - it only ever rode along in that ignored payload, and the setpoint loop publishes a real value within seconds anyway.
 
 **Sensors written**
 - `sensor.zendure_bypass_reached_at` - ISO timestamp of last confirmed bypass
@@ -67,7 +67,7 @@ Two responsibilities in one app:
 | `bypass_tracker.debounce_seconds` | `60` | Hold time before latching timestamp |
 | `bypass_tracker.solar_threshold_w` | `50` | Min solar input for bypass predicate (W) |
 | `bypass_tracker.fallback_days_when_missing` | `7` | Bootstrap age when sensor is missing |
-| `firmware_init.min_soc` | `10` | Hard discharge floor (%) - multiplied ×10 by the app before sending |
+| `firmware_init.min_soc` | `10` | Hard discharge floor (%) - multiplied ×10 by the app before sending (Zendure uses 0.1 % units, so `200` = 20 %). Must stay at or below `batt_floor_after_bypass`, or the hub stops discharging before the soft floor is reached and the post-bypass deep-drain window silently dies. |
 | `firmware_init.pass_mode` | `0` | passMode sent to firmware (0 = normal) |
 | `dry_run` | `true` | Must match `zendure_setpoint.dry_run` |
 

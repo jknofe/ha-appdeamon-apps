@@ -1,7 +1,7 @@
-"""Tests for app_helpers.parse_interval."""
+"""Tests for app_helpers."""
 import pytest
 
-from app_helpers import parse_interval
+from app_helpers import parse_interval, publish_log_action, publish_succeeded
 
 
 # ---- bare numeric forms ----
@@ -85,3 +85,69 @@ def test_parse_none_raises():
 def test_parse_empty_string_raises():
     with pytest.raises(ValueError):
         parse_interval("")
+
+
+# ---- publish_succeeded ----
+# Shapes taken from AppDaemon 4.5.13 hassplugin.websocket_send_json.
+
+def test_publish_succeeded_on_ok_result():
+    assert publish_succeeded({"success": True, "ad_status": "OK", "ad_duration": 0.01}) is True
+
+
+def test_publish_succeeded_false_on_hass_error():
+    # What was actually logged during the 2026-07-25 Mosquitto restart.
+    result = {"success": False, "error": {"code": "home_assistant_error",
+                                          "message": "Error talking to MQTT: "
+                                                     "The client is not currently connected."}}
+    assert publish_succeeded(result) is False
+
+
+def test_publish_succeeded_false_on_timeout():
+    assert publish_succeeded({"success": False, "ad_status": "TIMEOUT"}) is False
+
+
+def test_publish_succeeded_false_on_none():
+    # websocket_send_json returns None when the send is skipped during shutdown.
+    assert publish_succeeded(None) is False
+
+
+def test_publish_succeeded_false_on_missing_success_key():
+    assert publish_succeeded({"ad_status": "OK"}) is False
+
+
+def test_publish_succeeded_false_on_non_dict():
+    assert publish_succeeded("ok") is False
+    assert publish_succeeded(True) is False
+
+
+def test_publish_succeeded_requires_exactly_true():
+    # Truthy is not good enough - only an explicit True means HA acknowledged.
+    assert publish_succeeded({"success": 1}) is False
+
+
+# ---- publish_log_action ----
+
+def test_log_action_first_failure_logs_error():
+    assert publish_log_action(False, False) == ("error", True)
+
+
+def test_log_action_repeated_failure_is_silent():
+    # A broker outage must not log once per 20 s tick.
+    assert publish_log_action(False, True) == (None, True)
+
+
+def test_log_action_recovery_logs_once():
+    assert publish_log_action(True, True) == ("recovered", False)
+
+
+def test_log_action_steady_success_is_silent():
+    assert publish_log_action(True, False) == (None, False)
+
+
+def test_log_action_full_outage_cycle():
+    failing = False
+    actions = []
+    for ok in (True, False, False, False, True, True):
+        action, failing = publish_log_action(ok, failing)
+        actions.append(action)
+    assert actions == [None, "error", None, None, "recovered", None]
